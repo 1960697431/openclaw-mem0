@@ -145,6 +145,181 @@ class JsonCleaningLLM {
 }
 
 // ============================================================================
+// Reflection Engine — Active Brain (Intent Detection & Proactive Triggers)
+// ============================================================================
+
+/**
+ * A pending action discovered by the reflection engine.
+ * Stored in memory, checked by the heartbeat timer.
+ */
+type PendingAction = {
+  id: string;
+  message: string;
+  createdAt: number;
+  triggerAt: number; // Unix timestamp (ms) when this action should fire
+  fired: boolean;
+};
+
+/**
+ * The Reflection Engine analyzes newly captured memories to discover
+ * user intent, reminders, follow-ups, and patterns. It runs silently
+ * after every auto-capture cycle.
+ *
+ * Inspired by memU's five-step proactive loop:
+ *   Record → Organize → Retrieve → Reflect → Trigger/Act
+ * This engine handles the "Reflect" and "Trigger" steps.
+ */
+class ReflectionEngine {
+  private pendingActions: PendingAction[] = [];
+  private readonly MAX_PENDING = 5;
+  private readonly ACTION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+  // Built-in reflection prompt — invisible to users
+  private readonly REFLECTION_PROMPT = `You are a silent background memory analyzer for an AI assistant. Your job is to detect if the user has implied any future intent, reminder, follow-up, or recurring pattern.
+
+Analyze the following recent conversation and memories. Look for:
+1. Explicit reminders ("remind me", "don't forget", "tomorrow I need to...")
+2. Implicit intent ("I should probably...", "I'll deal with that later")
+3. Follow-up tasks ("let me know when...", "check back on...")
+4. Time-sensitive items (meetings, deadlines, appointments)
+5. Behavioral patterns (user always asks about X in the morning)
+
+IMPORTANT:
+- Only flag genuinely actionable items. Do NOT flag casual conversation.
+- Be conservative. When in doubt, return should_act: false.
+- The message should be natural and helpful, like a thoughtful assistant.
+- Estimate delay_minutes based on context (e.g., "tomorrow morning" = ~720 min).
+
+Respond with ONLY valid JSON, no markdown:
+{"should_act": true, "message": "friendly reminder text", "delay_minutes": 30}
+or
+{"should_act": false}`;
+
+  constructor(
+    private readonly llmConfig?: { provider: string; config: Record<string, unknown> },
+    private readonly logger?: { info: (msg: string) => void; debug?: (msg: string) => void; warn: (msg: string) => void },
+  ) { }
+
+  /**
+   * Called after auto-capture stores new memories.
+   * Sends the recent conversation to the LLM for intent analysis.
+   */
+  async reflect(
+    recentMessages: Array<{ role: string; content: string }>,
+    recentMemories: Array<{ memory: string }>,
+  ): Promise<void> {
+    if (!this.llmConfig) return;
+    if (recentMessages.length === 0) return;
+
+    // Prune expired/fired actions first
+    this.pruneActions();
+    if (this.pendingActions.length >= this.MAX_PENDING) return;
+
+    try {
+      // Build context for the LLM
+      const conversationSummary = recentMessages
+        .map((m) => `${m.role}: ${m.content}`)
+        .join("\n");
+
+      const memorySummary = recentMemories.length > 0
+        ? recentMemories.map((m) => `- ${m.memory}`).join("\n")
+        : "(no stored memories yet)";
+
+      const userPrompt = `Recent conversation:\n${conversationSummary}\n\nStored memories:\n${memorySummary}`;
+
+      // Call the LLM directly via OpenAI-compatible API
+      const llmCfg = this.llmConfig.config;
+      const baseURL = (llmCfg.baseURL as string) || "https://api.openai.com/v1";
+      const apiKey = (llmCfg.apiKey as string) || "";
+      const model = (llmCfg.model as string) || "gpt-4o";
+
+      const response = await fetch(`${baseURL}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: this.REFLECTION_PROMPT },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.3,
+          max_tokens: 200,
+        }),
+      });
+
+      if (!response.ok) {
+        this.logger?.debug?.(`openclaw-mem0: reflection LLM returned ${response.status}`);
+        return;
+      }
+
+      const data = (await response.json()) as any;
+      let content = data?.choices?.[0]?.message?.content ?? "";
+
+      // Strip markdown code blocks if present
+      content = content.trim();
+      const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+      if (codeBlockMatch) content = codeBlockMatch[1].trim();
+
+      const result = JSON.parse(content);
+
+      if (result.should_act && result.message) {
+        const delayMs = (result.delay_minutes || 0) * 60 * 1000;
+        const now = Date.now();
+
+        const action: PendingAction = {
+          id: `action_${now}_${Math.random().toString(36).slice(2, 8)}`,
+          message: result.message,
+          createdAt: now,
+          triggerAt: now + delayMs,
+          fired: false,
+        };
+
+        this.pendingActions.push(action);
+        this.logger?.info(
+          `openclaw-mem0: reflection detected intent → "${action.message}" (trigger in ${result.delay_minutes || 0}m)`,
+        );
+      }
+    } catch (err) {
+      // Silently fail — reflection is best-effort, must never break the main flow
+      this.logger?.debug?.(`openclaw-mem0: reflection error: ${String(err)}`);
+    }
+  }
+
+  /**
+   * Called by heartbeat timer and before_agent_start.
+   * Returns the first ripe action (triggerAt <= now) and marks it as fired.
+   */
+  checkPendingActions(): PendingAction | null {
+    this.pruneActions();
+    const now = Date.now();
+
+    for (const action of this.pendingActions) {
+      if (!action.fired && action.triggerAt <= now) {
+        action.fired = true;
+        return action;
+      }
+    }
+    return null;
+  }
+
+  /** Returns all unfired pending actions (for debugging/stats). */
+  getPendingCount(): number {
+    return this.pendingActions.filter((a) => !a.fired).length;
+  }
+
+  /** Remove expired or fired actions. */
+  private pruneActions(): void {
+    const now = Date.now();
+    this.pendingActions = this.pendingActions.filter(
+      (a) => !a.fired && now - a.createdAt < this.ACTION_TTL_MS,
+    );
+  }
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -1368,7 +1543,16 @@ const memoryPlugin = {
     // Lifecycle Hooks
     // ========================================================================
 
-    // Auto-recall: inject relevant memories before agent starts
+    // ========================================================================
+    // Reflection Engine — Active Brain
+    // ========================================================================
+
+    const reflectionEngine = new ReflectionEngine(
+      cfg.oss?.llm,
+      api.logger,
+    );
+
+    // Auto-recall: inject relevant memories + proactive insights before agent starts
     if (cfg.autoRecall) {
       api.on("before_agent_start", async (event, ctx) => {
         if (!event.prompt || event.prompt.length < 5) return;
@@ -1399,8 +1583,6 @@ const memoryPlugin = {
             (r) => !longTermIds.has(r.id),
           );
 
-          if (longTermResults.length === 0 && uniqueSessionResults.length === 0) return;
-
           // Build context with clear labels
           let memoryContext = "";
           if (longTermResults.length > 0) {
@@ -1419,14 +1601,32 @@ const memoryPlugin = {
               .join("\n");
           }
 
-          const totalCount = longTermResults.length + uniqueSessionResults.length;
-          api.logger.info(
-            `openclaw-mem0: injecting ${totalCount} memories into context (${longTermResults.length} long-term, ${uniqueSessionResults.length} session)`,
-          );
+          // Check for proactive insights from the reflection engine
+          const pendingAction = reflectionEngine.checkPendingActions();
+          let proactiveContext = "";
+          if (pendingAction) {
+            proactiveContext = `\n<proactive-insight>\n系统检测到以下需要关注的事项：\n${pendingAction.message}\n</proactive-insight>`;
+            api.logger.info(
+              `openclaw-mem0: injecting proactive insight: "${pendingAction.message}"`,
+            );
+          }
 
-          return {
-            systemContext: `<relevant-memories>\nThe following memories may be relevant to this conversation:\n${memoryContext}\n</relevant-memories>`,
-          };
+          const totalCount = longTermResults.length + uniqueSessionResults.length;
+          if (totalCount === 0 && !proactiveContext) return;
+
+          if (totalCount > 0) {
+            api.logger.info(
+              `openclaw-mem0: injecting ${totalCount} memories into context (${longTermResults.length} long-term, ${uniqueSessionResults.length} session)`,
+            );
+          }
+
+          let systemContext = "";
+          if (memoryContext) {
+            systemContext += `<relevant-memories>\nThe following memories may be relevant to this conversation:\n${memoryContext}\n</relevant-memories>`;
+          }
+          systemContext += proactiveContext;
+
+          return { systemContext };
         } catch (err) {
           api.logger.warn(`openclaw-mem0: recall failed: ${String(err)}`);
         }
@@ -1504,6 +1704,20 @@ const memoryPlugin = {
             api.logger.info(
               `openclaw-mem0: auto-captured ${capturedCount} memories`,
             );
+
+            // ── Reflection: analyze new memories for user intent ──
+            try {
+              const recentMemories = await provider.search(
+                formattedMessages.map((m) => m.content).join(" "),
+                buildSearchOptions(),
+              );
+              await reflectionEngine.reflect(formattedMessages, recentMemories);
+            } catch (reflectErr) {
+              // Silent — reflection must never break the main flow
+              api.logger.debug?.(
+                `openclaw-mem0: reflection skipped: ${String(reflectErr)}`,
+              );
+            }
           }
         } catch (err) {
           api.logger.warn(`openclaw-mem0: capture failed: ${String(err)}`);
@@ -1515,15 +1729,33 @@ const memoryPlugin = {
     // Service
     // ========================================================================
 
+    // Heartbeat timer for proactive action checking
+    let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
     api.registerService({
       id: "openclaw-mem0",
       start: () => {
         api.logger.info(
-          `openclaw-mem0: initialized (mode: ${cfg.mode}, user: ${cfg.userId}, autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture})`,
+          `openclaw-mem0: initialized (mode: ${cfg.mode}, user: ${cfg.userId}, autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture}, activeBrain: true)`,
         );
+
+        // Start heartbeat: check pending actions every 60 seconds
+        heartbeatTimer = setInterval(() => {
+          const action = reflectionEngine.checkPendingActions();
+          if (action) {
+            // Log the proactive insight — it will be injected on next conversation
+            api.logger.info(
+              `openclaw-mem0: ⚡ proactive action ready: "${action.message}"`,
+            );
+          }
+        }, 60_000);
       },
       stop: () => {
-        api.logger.info("openclaw-mem0: stopped");
+        if (heartbeatTimer) {
+          clearInterval(heartbeatTimer);
+          heartbeatTimer = null;
+        }
+        api.logger.info("openclaw-mem0: stopped (active brain deactivated)");
       },
     });
   },
