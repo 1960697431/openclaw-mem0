@@ -348,6 +348,9 @@ type Mem0Config = {
   autoRecall: boolean;
   searchThreshold: number;
   topK: number;
+  // Proactive messaging (Active Brain)
+  proactiveChannel?: string;  // e.g. "telegram", "imessage", "feishu"
+  proactiveTarget?: string;   // e.g. chat_id, phone number, user handle
 };
 
 // Unified types for the provider interface
@@ -812,6 +815,8 @@ const ALLOWED_KEYS = [
   "searchThreshold",
   "topK",
   "oss",
+  "proactiveChannel",
+  "proactiveTarget",
 ];
 
 function assertAllowedKeys(
@@ -882,6 +887,14 @@ const mem0ConfigSchema = {
         typeof cfg.searchThreshold === "number" ? cfg.searchThreshold : 0.5,
       topK: typeof cfg.topK === "number" ? cfg.topK : 5,
       oss: ossConfig,
+      proactiveChannel:
+        typeof cfg.proactiveChannel === "string" && cfg.proactiveChannel.trim()
+          ? cfg.proactiveChannel.trim()
+          : undefined,
+      proactiveTarget:
+        typeof cfg.proactiveTarget === "string" && cfg.proactiveTarget.trim()
+          ? cfg.proactiveTarget.trim()
+          : undefined,
     };
   },
 };
@@ -1552,6 +1565,22 @@ const memoryPlugin = {
       api.logger,
     );
 
+    // Track last active channel/sender for proactive message delivery
+    // Auto-detected from incoming messages, overridden by config
+    let lastActiveChannel: string | undefined = cfg.proactiveChannel;
+    let lastActiveFrom: string | undefined = cfg.proactiveTarget;
+    let lastActiveAccountId: string | undefined;
+
+    // Listen for incoming messages to auto-detect channel and sender
+    api.on("message_received", (event: any, ctx: any) => {
+      if (ctx?.channelId) lastActiveChannel = ctx.channelId;
+      if (ctx?.accountId) lastActiveAccountId = ctx.accountId;
+      if (event?.from) lastActiveFrom = event.from;
+      api.logger.debug?.(
+        `openclaw-mem0: tracked sender — channel=${lastActiveChannel}, from=${lastActiveFrom}`,
+      );
+    });
+
     // Auto-recall: inject relevant memories + proactive insights before agent starts
     if (cfg.autoRecall) {
       api.on("before_agent_start", async (event, ctx) => {
@@ -1732,21 +1761,78 @@ const memoryPlugin = {
     // Heartbeat timer for proactive action checking
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
+    /**
+     * Attempt to send a proactive message via the Gateway's `send` method.
+     * Falls back to next-turn injection if no target is available.
+     */
+    const deliverProactiveMessage = async (action: PendingAction): Promise<boolean> => {
+      // Resolve target: config overrides > auto-detected
+      const channel = cfg.proactiveChannel || lastActiveChannel;
+      const target = cfg.proactiveTarget || lastActiveFrom;
+
+      if (!channel || !target) {
+        // No target available — leave it for next-turn injection
+        api.logger.info(
+          `openclaw-mem0: ⏳ proactive action queued for next-turn (no target — channel=${channel ?? "?"}, to=${target ?? "?"})`,
+        );
+        // Un-fire so it stays in the queue for next-turn injection
+        action.fired = false;
+        return false;
+      }
+
+      try {
+        // Call Gateway HTTP API to send outbound message
+        const gatewayPort = 3000; // OpenClaw default
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/gateway`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            method: "send",
+            params: {
+              to: target,
+              message: action.message,
+              channel,
+              ...(lastActiveAccountId ? { accountId: lastActiveAccountId } : {}),
+              idempotencyKey: action.id,
+            },
+          }),
+        });
+
+        if (response.ok) {
+          api.logger.info(
+            `openclaw-mem0: ✅ proactive message sent via ${channel} → ${target}: "${action.message}"`,
+          );
+          return true;
+        } else {
+          const body = await response.text().catch(() => "(no body)");
+          api.logger.warn(
+            `openclaw-mem0: Gateway send failed (${response.status}): ${body} — falling back to next-turn`,
+          );
+          action.fired = false;
+          return false;
+        }
+      } catch (err) {
+        // Network/Gateway unavailable — leave for next-turn
+        api.logger.debug?.(
+          `openclaw-mem0: Gateway send error: ${String(err)} — queued for next-turn`,
+        );
+        action.fired = false;
+        return false;
+      }
+    };
+
     api.registerService({
       id: "openclaw-mem0",
       start: () => {
         api.logger.info(
-          `openclaw-mem0: initialized (mode: ${cfg.mode}, user: ${cfg.userId}, autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture}, activeBrain: true)`,
+          `openclaw-mem0: initialized (mode: ${cfg.mode}, user: ${cfg.userId}, autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture}, activeBrain: true, proactive: ${cfg.proactiveChannel ?? "auto-detect"})`,
         );
 
         // Start heartbeat: check pending actions every 60 seconds
-        heartbeatTimer = setInterval(() => {
+        heartbeatTimer = setInterval(async () => {
           const action = reflectionEngine.checkPendingActions();
           if (action) {
-            // Log the proactive insight — it will be injected on next conversation
-            api.logger.info(
-              `openclaw-mem0: ⚡ proactive action ready: "${action.message}"`,
-            );
+            await deliverProactiveMessage(action);
           }
         }, 60_000);
       },
