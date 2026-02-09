@@ -368,8 +368,14 @@ class OSSProvider implements Mem0Provider {
     const config: Record<string, unknown> = { version: "v1.1" };
 
     if (this.ossConfig?.embedder) config.embedder = this.ossConfig.embedder;
-    if (this.ossConfig?.vectorStore)
-      config.vectorStore = this.ossConfig.vectorStore;
+    if (this.ossConfig?.vectorStore) {
+      // Deep clone vectorStore config and resolve dbPath if present
+      const vectorStore = JSON.parse(JSON.stringify(this.ossConfig.vectorStore));
+      if (vectorStore.config?.dbPath && this.resolvePath) {
+        vectorStore.config.dbPath = this.resolvePath(vectorStore.config.dbPath);
+      }
+      config.vectorStore = vectorStore;
+    }
     if (this.ossConfig?.llm) config.llm = this.ossConfig.llm;
 
     if (this.ossConfig?.historyDbPath) {
