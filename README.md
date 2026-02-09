@@ -25,6 +25,24 @@
 - 官方记忆像一本**笔记本**，越写越厚，每次都要翻完
 - mem0 像一个**智能秘书**，只告诉你当前需要知道的
 
+### 与原版 mem0 插件对比
+
+这个项目是基于 [mem0ai/mem0](https://github.com/mem0ai/mem0) 官方 SDK 的增强版本：
+
+| 特性 | 原版 mem0 | 本插件 (增强版) |
+|------|-----------|----------------|
+| **嵌入模型** | Ollama + nomic-embed-text (768 dims) | transformersjs + Qwen3 (1024 dims) |
+| **外部依赖** | 需要 Ollama 服务 | 零依赖，纯 Node.js |
+| **LLM 兼容** | 需要返回纯 JSON | 自动清理 markdown 包装 |
+| **存储路径** | 不固定 (随 cwd 变化) | 固定在 `~/.openclaw/` |
+| **多语言** | 英文为主 | 100+ 语言（Qwen3） |
+| **Proactive Agent** | ✅ autoRecall + autoCapture | ✅ 完全保留 |
+
+**增强内容：**
+- 🚀 **TransformersJsEmbedder** — 本地 ONNX 嵌入，无需 Ollama
+- 🔧 **JsonCleaningLLM** — 自动剥离 Gemini 等模型返回的 markdown
+- 📁 **固定存储路径** — 避免数据分散在不同目录
+
 ---
 
 ## 📊 工作原理
