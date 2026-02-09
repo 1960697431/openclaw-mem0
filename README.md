@@ -148,6 +148,8 @@ openclaw plugins install https://github.com/1960697431/openclaw-mem0
     "userId": "你的用户名",
     "autoRecall": true,
     "autoCapture": true,
+    "proactiveChannel": "telegram",
+    "proactiveTarget": "你的chat_id",
     "oss": {
       "embedder": {
         "provider": "transformersjs",
@@ -181,6 +183,26 @@ launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway
 ```
 
 首次启动会自动下载嵌入模型（约 700MB）。
+
+---
+
+### 4. 配置主动消息（可选）
+
+插件默认会**自动检测**你最后活跃的渠道和发送者。如果你想固定推送到某个渠道：
+
+```json
+{
+  "proactiveChannel": "telegram",
+  "proactiveTarget": "你的chat_id或手机号"
+}
+```
+
+| 配置项 | 说明 | 示例 |
+|--------|------|------|
+| `proactiveChannel` | 发送渠道 | `"telegram"`, `"imessage"`, `"feishu"`, `"discord"` |
+| `proactiveTarget` | 目标 ID | Telegram chat_id, iMessage 手机号, 飞书 user_id |
+
+> **不填也没关系！** 如果不配置，插件会自动检测你最后一次对话的渠道和身份。如果完全无法确定目标，洞察会在下次对话时自然注入上下文。
 
 ---
 
