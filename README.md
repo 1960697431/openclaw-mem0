@@ -73,17 +73,25 @@ flowchart LR
         B --> C[AI 回复]
     end
     
-    subgraph 自动回忆 Auto-Recall
+    subgraph "自动回忆 Auto-Recall"
         A --> D{语义搜索}
         D --> E[(向量数据库)]
         E --> F[相关记忆]
         F --> B
+        I["💡 主动洞察"] --> B
     end
     
-    subgraph 自动捕获 Auto-Capture
+    subgraph "自动捕获 Auto-Capture"
         C --> G[LLM 提取事实]
         G --> H{去重/合并}
         H --> E
+    end
+
+    subgraph "🧠 活跃大脑 Active Brain"
+        H --> J["反思引擎 Reflect"]
+        J --> K{发现意图?}
+        K -->|是| I
+        K -->|否| L["静默"]
     end
 ```
 
@@ -98,6 +106,12 @@ flowchart LR
    - AI 回复后，插件调用 LLM 提取对话中的重要事实
    - 新事实自动去重、与旧记忆合并
    - 存入向量数据库
+
+3. **🧠 活跃大脑 (Active Brain)** — *灵感源自 [memU](https://github.com/NevaMind-AI/memU)*
+   - 每次存入新记忆后，**反思引擎**自动分析对话，发现用户隐含意图
+   - 检测到任务/提醒/跟进时，生成待触发行动
+   - 心跳定时器每 60 秒检查一次，到期行动在下次对话时自动注入上下文
+   - 全程静默运行，无需任何配置
 
 ---
 
