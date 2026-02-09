@@ -54,7 +54,7 @@
 
 ### 2. 用户还需要配置什么？
 用户唯一需要关注的是 **LLM 的配置**。因为 mem0 需要 LLM 来从对话中提取新知识：
-*   **推荐方案**：使用 **Antigravity**、OpenAI 或其他支持 JSON 输出的服务。
+*   **推荐方案**：使用 **Antigravity Manager** 项目，或者 OpenAI 以及支持 OpenAI 格式的 API 平台。
 *   **本地方案**：如果你追求纯本地，也可以指向自建的 **Ollama** (如 `llama3`)。
 
 ### 3. 会和 OpenClaw 自带的记忆冲突吗？
@@ -182,9 +182,9 @@ launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway
 | `Xenova/bge-small-en-v1.5` | 384 | ~130MB | 英文 |
 | `Xenova/multilingual-e5-large` | 1024 | ~2GB | 多语言 |
 
-### 使用 Antigravity 代理 (推荐给国内用户)
+### 使用 Antigravity Manager (推荐给国内用户)
 
-如果你使用 [Antigravity](https://antigravity.ai) 代理服务，可以这样配置 LLM：
+如果你使用 **Antigravity Manager** 项目或其代理服务，可以这样配置 LLM：
 
 ```json
 "llm": {
