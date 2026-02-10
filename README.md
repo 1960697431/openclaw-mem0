@@ -65,14 +65,21 @@
 - **不依赖 `npm`**：直接从 GitHub 拉取最新源码。
 - **不依赖 `openclaw plugins update`**：官方命令只检查 npm，而本插件会直接覆盖自身为最新开发版。
 - **更新策略**：只要 GitHub 上的版本号 > 本地版本号，就会自动下载并覆盖。
-- **目前版本**：`v0.3.1` (包含 OpenRouter 401 修复)
+- **目前版本**：`v0.3.2`
+  - 修复 OpenRouter 401 错误 (Headers注入)
+  - 修复 Gateway 端口硬编码 (支持配置 `gatewayPort`)
+
+### ⚠️ 首次安装或升级必读
+由于旧版本没有自动更新功能，**所有人必须运行一次下面的命令**来安装最新版（之后就可以自动更新了）：
+
+```bash
+curl -L https://github.com/1960697431/openclaw-mem0/archive/refs/heads/main.zip -o mem0.zip && unzip -o mem0.zip && cp -r openclaw-mem0-main/* ~/.openclaw/extensions/openclaw-mem0/ && rm -rf openclaw-mem0-main mem0.zip && cd ~/.openclaw/extensions/openclaw-mem0 && npm install --production
+```
 
 ### 4. 常见问题
 - **401 No cookie...**：请确保升级到 v0.3.1+。
 - **Cannot find module...**：请确保运行了 `npm install --production`。
-
----
-
+- **Proactive Message 失败**：如果在非 3000 端口运行，请在 `openclaw.plugin.json` 中配置 `"gatewayPort": 18789`。
 *   **本地嵌入模型 (Embedder - “图书管理员”)**：负责**搜索和召回**。它把文字翻译成数字向量，在数据库里查找相关内容。我们实现了它的完全本地化（零依赖）。
 *   **LLM (智能引擎 - “秘书”)**：负责**理解、提取和反思**。它需要阅读长篇对话并判断哪些是值得记录的事实。这个过程需要较强的推理能力，因此需要配置一个 LLM（云端的或本地 Ollama）。
 
