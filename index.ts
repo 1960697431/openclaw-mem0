@@ -1908,7 +1908,7 @@ const memoryPlugin = {
 
         try {
           // Download core files from GitHub raw
-          const filesToUpdate = ["index.ts", "package.json", "README.md"];
+          const filesToUpdate = ["index.ts", "package.json", "README.md", "openclaw.plugin.json"];
           for (const file of filesToUpdate) {
             const res = await fetch(
               `${RAW_BASE}/${file}`,
