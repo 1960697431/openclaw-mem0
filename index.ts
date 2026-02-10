@@ -1872,21 +1872,27 @@ const memoryPlugin = {
     const checkForUpdates = async () => {
       const { execSync } = await import("node:child_process");
       const { fileURLToPath } = await import("node:url");
-      const { dirname } = await import("node:path");
+      const { dirname, join } = await import("node:path");
+      const { writeFileSync, readFileSync } = await import("node:fs");
 
       // Resolve plugin directory from this file's location
       const pluginDir = dirname(fileURLToPath(import.meta.url));
+      const RAW_BASE = `https://raw.githubusercontent.com/${GITHUB_REPO}/main`;
 
       try {
-        // Step 1: Check remote version via GitHub API
+        // Step 1: Check remote version
         const pkgResponse = await fetch(
-          `https://raw.githubusercontent.com/${GITHUB_REPO}/main/package.json`,
+          `${RAW_BASE}/package.json`,
           { signal: AbortSignal.timeout(8000) },
         );
         if (!pkgResponse.ok) return;
 
-        const pkgData = (await pkgResponse.json()) as { version?: string };
-        const remoteVersion = pkgData.version ?? "0.0.0";
+        const remotePkgText = await pkgResponse.text();
+        const remotePkg = JSON.parse(remotePkgText) as {
+          version?: string;
+          dependencies?: Record<string, string>;
+        };
+        const remoteVersion = remotePkg.version ?? "0.0.0";
 
         if (remoteVersion === LOCAL_VERSION) {
           api.logger.debug?.(
@@ -1895,27 +1901,48 @@ const memoryPlugin = {
           return;
         }
 
-        // Step 2: New version found — auto-update!
+        // Step 2: New version found — download updated files
         api.logger.warn(
           `openclaw-mem0: ⬆️ 发现新版本 v${remoteVersion} (当前 v${LOCAL_VERSION})，正在自动更新...`,
         );
 
         try {
-          // git pull
-          execSync("git pull origin main", {
-            cwd: pluginDir,
-            timeout: 30_000,
-            stdio: "pipe",
-          });
-          api.logger.info("openclaw-mem0: ✅ git pull 完成");
+          // Download core files from GitHub raw
+          const filesToUpdate = ["index.ts", "package.json", "README.md"];
+          for (const file of filesToUpdate) {
+            const res = await fetch(
+              `${RAW_BASE}/${file}`,
+              { signal: AbortSignal.timeout(15000) },
+            );
+            if (res.ok) {
+              const content = await res.text();
+              writeFileSync(join(pluginDir, file), content, "utf-8");
+              api.logger.info(`openclaw-mem0: ✅ 已更新 ${file}`);
+            }
+          }
 
-          // npm install (in case dependencies changed)
-          execSync("npm install --production --no-audit --no-fund", {
-            cwd: pluginDir,
-            timeout: 60_000,
-            stdio: "pipe",
-          });
-          api.logger.info("openclaw-mem0: ✅ npm install 完成");
+          // Check if dependencies changed — only run npm install if needed
+          let needsNpmInstall = false;
+          try {
+            const localPkg = JSON.parse(
+              readFileSync(join(pluginDir, "package.json"), "utf-8"),
+            ) as { dependencies?: Record<string, string> };
+            const localDeps = JSON.stringify(localPkg.dependencies ?? {});
+            const remoteDeps = JSON.stringify(remotePkg.dependencies ?? {});
+            needsNpmInstall = localDeps !== remoteDeps;
+          } catch {
+            needsNpmInstall = true;
+          }
+
+          if (needsNpmInstall) {
+            api.logger.info("openclaw-mem0: 📦 依赖有变化，正在安装...");
+            execSync("npm install --production --no-audit --no-fund", {
+              cwd: pluginDir,
+              timeout: 60_000,
+              stdio: "pipe",
+            });
+            api.logger.info("openclaw-mem0: ✅ npm install 完成");
+          }
 
           api.logger.warn(
             `openclaw-mem0: 🔄 更新完成 v${LOCAL_VERSION} → v${remoteVersion}，Gateway 将在 10 秒后自动重启...`,
@@ -1931,7 +1958,7 @@ const memoryPlugin = {
         } catch (updateErr) {
           api.logger.error(
             `openclaw-mem0: ❌ 自动更新失败: ${String(updateErr)}\n` +
-            `  请手动运行: cd ${pluginDir} && git pull origin main && npm install`,
+            `  请手动运行: cd ${pluginDir} && openclaw plugins update openclaw-mem0`,
           );
         }
       } catch {
