@@ -851,14 +851,23 @@ const ALLOWED_KEYS = [
   "proactiveTarget",
 ];
 
-function assertAllowedKeys(
+/**
+ * Warn about and strip unknown config keys instead of throwing.
+ * This makes the plugin forward-compatible: users can add config
+ * fields from a newer README without breaking older plugin versions.
+ */
+function warnAndStripUnknownKeys(
   value: Record<string, unknown>,
   allowed: string[],
   label: string,
-) {
+): void {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unknown.length === 0) return;
-  throw new Error(`${label} has unknown keys: ${unknown.join(", ")}`);
+  // Log warning but don't throw — just strip the unknown keys
+  console.warn(`[openclaw-mem0] ${label}: ignoring unknown keys: ${unknown.join(", ")} (update plugin to enable these features)`);
+  for (const key of unknown) {
+    delete value[key];
+  }
 }
 
 const mem0ConfigSchema = {
@@ -867,7 +876,7 @@ const mem0ConfigSchema = {
       throw new Error("openclaw-mem0 config required");
     }
     const cfg = value as Record<string, unknown>;
-    assertAllowedKeys(cfg, ALLOWED_KEYS, "openclaw-mem0 config");
+    warnAndStripUnknownKeys(cfg, ALLOWED_KEYS, "openclaw-mem0 config");
 
     // Accept both "open-source" and legacy "oss" as open-source mode; everything else is platform
     const mode: Mem0Mode =
