@@ -83,21 +83,49 @@ class JsonCleaningLLM {
   constructor(private wrappedLLM: any) { }
 
   /**
-   * Strips markdown code blocks from a string.
-   * Handles: ```json ... ```, ``` ... ```, and leading/trailing whitespace
+   * Extracts JSON from LLM responses that may contain markdown code blocks,
+   * preamble text, or other non-JSON content.
+   * Handles verbose models (e.g. Ollama) that add explanations around JSON.
    */
   private cleanJsonResponse(content: string): string {
     if (!content || typeof content !== "string") return content;
 
-    // Strip ```json or ``` code blocks
     let cleaned = content.trim();
 
-    // Match ```json ... ``` or ``` ... ```
-    const codeBlockMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
-    if (codeBlockMatch) {
-      cleaned = codeBlockMatch[1].trim();
+    // Strategy 1: Full-text code block (```json ... ``` or ``` ... ```)
+    const fullMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+    if (fullMatch) {
+      return fullMatch[1].trim();
     }
 
+    // Strategy 2: Extract the LAST code block from verbose response
+    // (models often add explanation before the JSON block)
+    const codeBlocks = [...cleaned.matchAll(/```(?:json)?\s*([\s\S]*?)\s*```/g)];
+    if (codeBlocks.length > 0) {
+      // Use the last code block (usually the actual JSON output)
+      const lastBlock = codeBlocks[codeBlocks.length - 1][1].trim();
+      // Verify it looks like JSON
+      if (lastBlock.startsWith("{") || lastBlock.startsWith("[")) {
+        return lastBlock;
+      }
+      // If not JSON-like, still return it (might be the intended output)
+      return lastBlock;
+    }
+
+    // Strategy 3: Find raw JSON object/array in the response
+    // (model returned JSON without code blocks but with surrounding text)
+    const jsonMatch = cleaned.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+    if (jsonMatch) {
+      // Validate it's parseable JSON
+      try {
+        JSON.parse(jsonMatch[1]);
+        return jsonMatch[1];
+      } catch {
+        // Not valid JSON, fall through
+      }
+    }
+
+    // Strategy 4: Return as-is (already clean or unparseable)
     return cleaned;
   }
 
@@ -1821,12 +1849,69 @@ const memoryPlugin = {
       }
     };
 
+    // ========================================================================
+    // Auto-Update Checker
+    // ========================================================================
+
+    const GITHUB_REPO = "1960697431/openclaw-mem0";
+    const LOCAL_VERSION = "0.1.0"; // Keep in sync with package.json
+
+    const checkForUpdates = async () => {
+      try {
+        const response = await fetch(
+          `https://api.github.com/repos/${GITHUB_REPO}/commits/main`,
+          {
+            headers: { "Accept": "application/vnd.github.v3+json" },
+            signal: AbortSignal.timeout(5000),
+          },
+        );
+        if (!response.ok) return;
+
+        const data = (await response.json()) as {
+          sha?: string;
+          commit?: { message?: string; committer?: { date?: string } };
+        };
+        const latestSha = data.sha?.slice(0, 7) ?? "unknown";
+        const commitMsg = data.commit?.message?.split("\n")[0] ?? "";
+        const commitDate = data.commit?.committer?.date ?? "";
+
+        // Also check if package.json has a newer version
+        const pkgResponse = await fetch(
+          `https://raw.githubusercontent.com/${GITHUB_REPO}/main/package.json`,
+          { signal: AbortSignal.timeout(5000) },
+        );
+        if (pkgResponse.ok) {
+          const pkgData = (await pkgResponse.json()) as { version?: string };
+          const remoteVersion = pkgData.version ?? "0.0.0";
+
+          if (remoteVersion !== LOCAL_VERSION) {
+            api.logger.warn(
+              `openclaw-mem0: ⬆️ 发现新版本 v${remoteVersion} (当前 v${LOCAL_VERSION}) — ` +
+              `最新提交: ${latestSha} "${commitMsg}" (${commitDate})\n` +
+              `  运行以下命令更新: openclaw plugins update openclaw-mem0`,
+            );
+            return;
+          }
+        }
+
+        api.logger.debug?.(
+          `openclaw-mem0: version check OK — v${LOCAL_VERSION} is up to date (latest: ${latestSha})`,
+        );
+      } catch {
+        // Network error, skip silently
+        api.logger.debug?.("openclaw-mem0: update check skipped (network unavailable)");
+      }
+    };
+
     api.registerService({
       id: "openclaw-mem0",
       start: () => {
         api.logger.info(
           `openclaw-mem0: initialized (mode: ${cfg.mode}, user: ${cfg.userId}, autoRecall: ${cfg.autoRecall}, autoCapture: ${cfg.autoCapture}, activeBrain: true, proactive: ${cfg.proactiveChannel ?? "auto-detect"})`,
         );
+
+        // Check for plugin updates on startup (non-blocking)
+        checkForUpdates();
 
         // Start heartbeat: check pending actions every 60 seconds
         heartbeatTimer = setInterval(async () => {
