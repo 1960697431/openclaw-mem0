@@ -262,46 +262,226 @@ launchctl kickstart -k gui/$(id -u)/ai.openclaw.gateway
 | `Xenova/bge-small-en-v1.5` | 384 | ~130MB | 英文 |
 | `Xenova/multilingual-e5-large` | 1024 | ~2GB | 多语言 |
 
-### 使用 Antigravity Manager (推荐给国内用户)
+### LLM 配置大全
 
-如果你使用 **Antigravity Manager** 项目或其代理服务，可以这样配置 LLM：
+mem0 需要一个 LLM 来从对话中**提取事实**。支持的 `provider` 有：`openai`、`ollama`、`anthropic`、`groq`、`google`/`gemini`、`azure_openai`、`mistral`。
+
+> ⚠️ **重要**：`openai` 和 `ollama` 的配置字段**不同**！Ollama 用 `url`，OpenAI 兼容接口用 `baseURL`。搞混会导致连接失败。
+
+#### 配置速查表
+
+| 供应商 | provider | 模型示例 | 特别说明 |
+|--------|----------|---------|---------|
+| Ollama (本地) | `ollama` | `qwen3:32b` | 用 `url` 不是 `baseURL` |
+| OpenAI | `openai` | `gpt-4o` | 默认 baseURL |
+| DeepSeek | `openai` | `deepseek-chat` | OpenAI 兼容 |
+| 通义千问 (DashScope) | `openai` | `qwen-plus` | OpenAI 兼容 |
+| Kimi (月之暗面) | `openai` | `moonshot-v1-8k` | OpenAI 兼容 |
+| 智谱AI (GLM) | `openai` | `glm-4-flash` | OpenAI 兼容 |
+| 硅基流动 (SiliconFlow) | `openai` | `deepseek-ai/DeepSeek-V3` | OpenAI 兼容 |
+| 零一万物 (01.AI) | `openai` | `yi-lightning` | OpenAI 兼容 |
+| Anthropic | `anthropic` | `claude-sonnet-4-20250514` | 需要 anthropic SDK |
+| Google Gemini | `gemini` | `gemini-2.5-flash` | 需要 Google SDK |
+| Groq | `groq` | `llama-3.3-70b-versatile` | Groq 加速推理 |
+
+---
+
+#### 🖥️ Ollama（本地 LLM）
+
+> ⚠️ Ollama 的配置字段是 **`url`**，不是 `baseURL`！这是最常见的配置错误。
+
+```json
+"llm": {
+  "provider": "ollama",
+  "config": {
+    "model": "qwen3:32b",
+    "url": "http://127.0.0.1:11434"
+  }
+}
+```
+
+**运行 `ollama list` 确认你的模型名称拼写正确。**
+
+推荐模型（按能力排序）：
+
+| 模型 | 推荐场景 | 说明 |
+|------|---------|------|
+| `qwen3:32b` | 最佳效果 | 中英文均强，需要 ~20GB 显存 |
+| `qwen2.5:14b` | 平衡之选 | 效果好，需要 ~10GB 显存 |
+| `qwen2.5:7b` | 轻量方案 | 够用，需要 ~5GB 显存 |
+| `llama3.1:8b` | 英文为主 | Meta 开源模型 |
+
+---
+
+#### 🔥 DeepSeek（推荐国内用户）
+
+DeepSeek 的 API 完全兼容 OpenAI 格式，价格极低。
 
 ```json
 "llm": {
   "provider": "openai",
   "config": {
-    "apiKey": "你的Antigravity密钥",
+    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+    "model": "deepseek-chat",
+    "baseURL": "https://api.deepseek.com/v1"
+  }
+}
+```
+
+申请地址：[platform.deepseek.com](https://platform.deepseek.com)
+
+| 模型 | 说明 |
+|------|------|
+| `deepseek-chat` | V3 模型，性价比极高 |
+| `deepseek-reasoner` | R1 推理模型（更慢但更准） |
+
+---
+
+#### ☁️ 通义千问 / DashScope（阿里云）
+
+```json
+"llm": {
+  "provider": "openai",
+  "config": {
+    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+    "model": "qwen-plus",
+    "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  }
+}
+```
+
+申请地址：[dashscope.console.aliyun.com](https://dashscope.console.aliyun.com)
+
+| 模型 | 说明 |
+|------|------|
+| `qwen-turbo` | 最快最便宜 |
+| `qwen-plus` | 平衡之选 ⭐ |
+| `qwen-max` | 最强能力 |
+
+---
+
+#### 🌙 Kimi / Moonshot（月之暗面）
+
+```json
+"llm": {
+  "provider": "openai",
+  "config": {
+    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+    "model": "moonshot-v1-8k",
+    "baseURL": "https://api.moonshot.cn/v1"
+  }
+}
+```
+
+申请地址：[platform.moonshot.cn](https://platform.moonshot.cn)
+
+| 模型 | 上下文长度 |
+|------|-----------|
+| `moonshot-v1-8k` | 8K |
+| `moonshot-v1-32k` | 32K |
+| `moonshot-v1-128k` | 128K |
+
+---
+
+#### 🧠 智谱AI / GLM
+
+```json
+"llm": {
+  "provider": "openai",
+  "config": {
+    "apiKey": "xxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxx",
+    "model": "glm-4-flash",
+    "baseURL": "https://open.bigmodel.cn/api/paas/v4"
+  }
+}
+```
+
+申请地址：[open.bigmodel.cn](https://open.bigmodel.cn)
+
+| 模型 | 说明 |
+|------|------|
+| `glm-4-flash` | 免费，速度快 ⭐ |
+| `glm-4-plus` | 更强能力 |
+
+---
+
+#### ⚡ 硅基流动 / SiliconFlow
+
+硅基流动聚合了多家开源模型，可以用一个 API Key 访问 DeepSeek、Qwen、Llama 等：
+
+```json
+"llm": {
+  "provider": "openai",
+  "config": {
+    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+    "model": "deepseek-ai/DeepSeek-V3",
+    "baseURL": "https://api.siliconflow.cn/v1"
+  }
+}
+```
+
+申请地址：[cloud.siliconflow.cn](https://cloud.siliconflow.cn)
+
+---
+
+#### 🌟 零一万物 / 01.AI
+
+```json
+"llm": {
+  "provider": "openai",
+  "config": {
+    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+    "model": "yi-lightning",
+    "baseURL": "https://api.lingyiwanwu.com/v1"
+  }
+}
+```
+
+---
+
+#### 🇺🇸 OpenAI
+
+```json
+"llm": {
+  "provider": "openai",
+  "config": {
+    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
+    "model": "gpt-4o"
+  }
+}
+```
+
+> 无需填 `baseURL`，SDK 默认连接 `api.openai.com`。
+
+---
+
+#### 🔌 Antigravity Manager（本地代理）
+
+如果你使用 Antigravity Manager 或其他本地 API 代理：
+
+```json
+"llm": {
+  "provider": "openai",
+  "config": {
+    "apiKey": "你的密钥",
     "model": "gemini-3-flash",
     "baseURL": "http://localhost:8045/v1"
   }
 }
 ```
 
-> ⚠️ **注意**：Gemini 等模型返回 JSON 时会包装在 markdown 代码块中。本插件已内置 `JsonCleaningLLM` 自动处理此问题。
+> 💡 本插件内置 `JsonCleaningLLM`，自动处理 Gemini 等模型返回 markdown 代码块的问题。
 
-### 使用 OpenAI API
+---
 
-```json
-"llm": {
-  "provider": "openai",
-  "config": {
-    "apiKey": "${OPENAI_API_KEY}",
-    "model": "gpt-4o"
-  }
-}
-```
+#### ⚠️ 常见配置错误
 
-### 使用 Ollama (本地 LLM)
-
-```json
-"llm": {
-  "provider": "ollama",
-  "config": {
-    "model": "llama3",
-    "baseURL": "http://localhost:11434"
-  }
-}
-```
+| 错误 | 原因 | 解决 |
+|------|------|------|
+| "No memories found" | LLM 连接失败，提取不到事实 | 检查 apiKey 和 baseURL |
+| Ollama 连不上 | 用了 `baseURL` 而不是 `url` | 改成 `"url": "http://..."` |
+| JSON 解析失败 | 模型返回格式不规范 | 换用更强的模型或使用 DeepSeek |
+| ETIMEDOUT | 国内网络访问 OpenAI 超时 | 换用国产 API 或配置代理 |
 
 ---
 
