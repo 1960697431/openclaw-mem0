@@ -137,6 +137,9 @@
       "proactiveTarget": {
         "type": "string"
       },
+      "gatewayPort": {
+        "type": "number"
+      },
       "oss": {
         "type": "object",
         "properties": {

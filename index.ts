@@ -379,6 +379,7 @@ type Mem0Config = {
   // Proactive messaging (Active Brain)
   proactiveChannel?: string;  // e.g. "telegram", "imessage", "feishu"
   proactiveTarget?: string;   // e.g. chat_id, phone number, user handle
+  gatewayPort?: number;       // e.g. 3000, 18789
 };
 
 // Unified types for the provider interface
@@ -869,6 +870,7 @@ const ALLOWED_KEYS = [
   "oss",
   "proactiveChannel",
   "proactiveTarget",
+  "gatewayPort",
 ];
 
 /**
@@ -956,6 +958,8 @@ const mem0ConfigSchema = {
         typeof cfg.proactiveTarget === "string" && cfg.proactiveTarget.trim()
           ? cfg.proactiveTarget.trim()
           : undefined,
+      gatewayPort:
+        typeof cfg.gatewayPort === "number" ? cfg.gatewayPort : undefined,
     };
   },
 };
@@ -1846,7 +1850,8 @@ const memoryPlugin = {
 
       try {
         // Call Gateway HTTP API to send outbound message
-        const gatewayPort = 3000; // OpenClaw default
+        // Use configured port or fallback to env.PORT or default 3000
+        const gatewayPort = cfg.gatewayPort || Number(process.env.PORT) || 3000;
         const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/gateway`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1890,7 +1895,7 @@ const memoryPlugin = {
     // ========================================================================
 
     const GITHUB_REPO = "1960697431/openclaw-mem0";
-    const LOCAL_VERSION = "0.3.1"; // Keep in sync with package.json
+    const LOCAL_VERSION = "0.3.2"; // Keep in sync with package.json
 
     const checkForUpdates = async () => {
       const { execSync } = await import("node:child_process");
