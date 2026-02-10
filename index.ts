@@ -1870,46 +1870,70 @@ const memoryPlugin = {
     const LOCAL_VERSION = "0.2.0"; // Keep in sync with package.json
 
     const checkForUpdates = async () => {
+      const { execSync } = await import("node:child_process");
+      const { fileURLToPath } = await import("node:url");
+      const { dirname } = await import("node:path");
+
+      // Resolve plugin directory from this file's location
+      const pluginDir = dirname(fileURLToPath(import.meta.url));
+
       try {
-        const response = await fetch(
-          `https://api.github.com/repos/${GITHUB_REPO}/commits/main`,
-          {
-            headers: { "Accept": "application/vnd.github.v3+json" },
-            signal: AbortSignal.timeout(5000),
-          },
-        );
-        if (!response.ok) return;
-
-        const data = (await response.json()) as {
-          sha?: string;
-          commit?: { message?: string; committer?: { date?: string } };
-        };
-        const latestSha = data.sha?.slice(0, 7) ?? "unknown";
-        const commitMsg = data.commit?.message?.split("\n")[0] ?? "";
-        const commitDate = data.commit?.committer?.date ?? "";
-
-        // Also check if package.json has a newer version
+        // Step 1: Check remote version via GitHub API
         const pkgResponse = await fetch(
           `https://raw.githubusercontent.com/${GITHUB_REPO}/main/package.json`,
-          { signal: AbortSignal.timeout(5000) },
+          { signal: AbortSignal.timeout(8000) },
         );
-        if (pkgResponse.ok) {
-          const pkgData = (await pkgResponse.json()) as { version?: string };
-          const remoteVersion = pkgData.version ?? "0.0.0";
+        if (!pkgResponse.ok) return;
 
-          if (remoteVersion !== LOCAL_VERSION) {
-            api.logger.warn(
-              `openclaw-mem0: ⬆️ 发现新版本 v${remoteVersion} (当前 v${LOCAL_VERSION}) — ` +
-              `最新提交: ${latestSha} "${commitMsg}" (${commitDate})\n` +
-              `  运行以下命令更新: openclaw plugins update openclaw-mem0`,
-            );
-            return;
-          }
+        const pkgData = (await pkgResponse.json()) as { version?: string };
+        const remoteVersion = pkgData.version ?? "0.0.0";
+
+        if (remoteVersion === LOCAL_VERSION) {
+          api.logger.debug?.(
+            `openclaw-mem0: ✅ v${LOCAL_VERSION} is up to date`,
+          );
+          return;
         }
 
-        api.logger.debug?.(
-          `openclaw-mem0: version check OK — v${LOCAL_VERSION} is up to date (latest: ${latestSha})`,
+        // Step 2: New version found — auto-update!
+        api.logger.warn(
+          `openclaw-mem0: ⬆️ 发现新版本 v${remoteVersion} (当前 v${LOCAL_VERSION})，正在自动更新...`,
         );
+
+        try {
+          // git pull
+          execSync("git pull origin main", {
+            cwd: pluginDir,
+            timeout: 30_000,
+            stdio: "pipe",
+          });
+          api.logger.info("openclaw-mem0: ✅ git pull 完成");
+
+          // npm install (in case dependencies changed)
+          execSync("npm install --production --no-audit --no-fund", {
+            cwd: pluginDir,
+            timeout: 60_000,
+            stdio: "pipe",
+          });
+          api.logger.info("openclaw-mem0: ✅ npm install 完成");
+
+          api.logger.warn(
+            `openclaw-mem0: 🔄 更新完成 v${LOCAL_VERSION} → v${remoteVersion}，Gateway 将在 10 秒后自动重启...`,
+          );
+
+          // Step 3: Graceful restart — wait 10s then exit
+          // launchd will automatically restart the Gateway process
+          setTimeout(() => {
+            api.logger.warn("openclaw-mem0: 🔄 正在重启 Gateway 以加载新版本...");
+            process.exit(0);
+          }, 10_000);
+
+        } catch (updateErr) {
+          api.logger.error(
+            `openclaw-mem0: ❌ 自动更新失败: ${String(updateErr)}\n` +
+            `  请手动运行: cd ${pluginDir} && git pull origin main && npm install`,
+          );
+        }
       } catch {
         // Network error, skip silently
         api.logger.debug?.("openclaw-mem0: update check skipped (network unavailable)");
