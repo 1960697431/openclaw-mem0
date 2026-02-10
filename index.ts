@@ -541,6 +541,7 @@ class OSSProvider implements Mem0Provider {
     private readonly ossConfig?: Mem0Config["oss"],
     private readonly customPrompt?: string,
     private readonly resolvePath?: (p: string) => string,
+    private readonly logger?: OpenClawPluginApi["logger"],
   ) { }
 
   private async ensureMemory(): Promise<void> {
@@ -570,8 +571,27 @@ class OSSProvider implements Mem0Provider {
     // Monkey-patch LLMFactory to wrap LLM with JsonCleaningLLM
     // This strips markdown code blocks (```json ... ```) from responses
     const originalLLMCreate = LLMFactory.create.bind(LLMFactory);
+    const self = this;
     LLMFactory.create = (provider: string, config: any) => {
+      self.logger?.info(`[mem0] Initializing LLM provider: ${provider} with model: ${config?.model}`);
+      
       const llm = originalLLMCreate(provider, config);
+
+      // Fix for OpenRouter: Inject required headers to prevent 401/Redirects
+      // We access the underlying openai instance (which is loosely typed here)
+      if (provider === "openai" && (llm as any).openai) {
+        const openaiClient = (llm as any).openai;
+        // Ensure defaultHeaders exists
+        if (!openaiClient.defaultHeaders) openaiClient.defaultHeaders = {};
+        
+        Object.assign(openaiClient.defaultHeaders, {
+          "HTTP-Referer": "https://github.com/1960697431/openclaw-mem0",
+          "X-Title": "OpenClaw Mem0 Plugin",
+        });
+        
+        self.logger?.debug(`[mem0] Injected OpenRouter headers for OpenAI provider`);
+      }
+
       return new JsonCleaningLLM(llm);
     };
 
@@ -949,8 +969,11 @@ function createProvider(
   api: OpenClawPluginApi,
 ): Mem0Provider {
   if (cfg.mode === "open-source") {
-    return new OSSProvider(cfg.oss, cfg.customPrompt, (p) =>
-      api.resolvePath(p),
+    return new OSSProvider(
+      cfg.oss,
+      cfg.customPrompt,
+      (p) => api.resolvePath(p),
+      api.logger,
     );
   }
 
@@ -1867,7 +1890,7 @@ const memoryPlugin = {
     // ========================================================================
 
     const GITHUB_REPO = "1960697431/openclaw-mem0";
-    const LOCAL_VERSION = "0.3.0"; // Keep in sync with package.json
+    const LOCAL_VERSION = "0.3.1"; // Keep in sync with package.json
 
     const checkForUpdates = async () => {
       const { execSync } = await import("node:child_process");
