@@ -551,6 +551,10 @@ class OSSProvider implements Mem0Provider {
   }
 
   private async _init(): Promise<void> {
+    // Disable mem0ai's built-in PostHog telemetry (us.i.posthog.com)
+    // This prevents ETIMEDOUT errors for users behind firewalls or in China
+    process.env.MEM0_TELEMETRY = "false";
+
     const mem0Oss = await import("mem0ai/oss");
     const { Memory, EmbedderFactory, LLMFactory } = mem0Oss;
 
