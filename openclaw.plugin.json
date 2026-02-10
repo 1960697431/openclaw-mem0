@@ -64,6 +64,16 @@
       "placeholder": "5",
       "help": "Maximum number of memories to retrieve"
     },
+    "proactiveChannel": {
+      "label": "Proactive Channel",
+      "placeholder": "telegram",
+      "help": "Channel to send proactive messages to (e.g. telegram, imessage, feishu)"
+    },
+    "proactiveTarget": {
+      "label": "Proactive Target",
+      "placeholder": "chat_id or phone number",
+      "help": "Target user/chat ID for proactive messages"
+    },
     "oss": {
       "label": "Open-Source Configuration",
       "advanced": true,
@@ -120,6 +130,12 @@
       },
       "topK": {
         "type": "number"
+      },
+      "proactiveChannel": {
+        "type": "string"
+      },
+      "proactiveTarget": {
+        "type": "string"
       },
       "oss": {
         "type": "object",
