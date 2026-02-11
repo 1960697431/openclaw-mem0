@@ -71,7 +71,7 @@ curl -L https://github.com/1960697431/openclaw-mem0/archive/refs/heads/main.zip 
 openclaw gateway restart
 ```
 
-首次启动会自动下载嵌入模型（约 700MB），之后即可离线使用。
+首次启动会自动从 GitHub Releases 下载嵌入模型（约 417MB 压缩包），之后即可离线使用。
 
 **✅ 安装完成！** 现在正常和 AI 对话即可，记忆会全自动运行。
 
@@ -342,7 +342,7 @@ mem0 需要一个 LLM 来提取对话中的事实。以下是所有支持的配�
 
 | 模型 | 维度 | 大小 | 语言 |
 |------|------|------|------|
-| `onnx-community/Qwen3-Embedding-0.6B-ONNX` ⭐ | 1024 | ~700MB | 100+ |
+| `onnx-community/Qwen3-Embedding-0.6B-ONNX` ⭐ | 1024 | ~585MB（首次自动从 GitHub Releases 下载） | 100+ |
 | `Xenova/bge-small-en-v1.5` | 384 | ~130MB | 英文 |
 | `Xenova/multilingual-e5-large` | 1024 | ~2GB | 多语言 |
 
@@ -380,8 +380,9 @@ openclaw mem0 list                       # 列出所有
 | **Ollama 连不上** | 用 `url` 不是 `baseURL` |
 | **Proactive Message 失败** | 设置 `"gatewayPort": 你的端口` |
 | **ETIMEDOUT** | 国内网络访问 OpenAI 超时，换国产 API |
-| **首次启动很慢** | 正常 — 正在下载 700MB 嵌入模型 |
-| **需要翻墙吗？** | 嵌入模型不需要，LLM 取决于你的配置 |
+| **首次启动很慢** | 正常 — 正在从 GitHub Releases 下载约 417MB 嵌入模型 |
+| **模型下载失败 (fetch failed)** | 模型默认从 GitHub 下载（国内可达）。如仍失败，可设置 `export HF_ENDPOINT=https://hf-mirror.com` 回退到 HuggingFace 镜像 |
+| **需要翻墙吗？** | 嵌入模型从 GitHub Releases 下载，不需要翻墙；LLM 取决于你的配置 |
 | **与官方记忆冲突吗？** | 不会，两者独立运行 |
 | **支持多用户吗？** | 支持，设置不同的 `userId` 即可 |
 | **记忆存在哪？** | `~/.openclaw/mem0-vectors.db` |
@@ -394,9 +395,16 @@ openclaw mem0 list                       # 列出所有
 
 - 不依赖 `npm` 或 `openclaw plugins update`
 - 只要 GitHub 版本号 > 本地版本号 → 自动下载覆盖
-- **当前版本：`v0.3.2`**
+- **当前版本：`v0.3.4`**
 
 > ⚠️ 旧版本（v0.2.x 及以下）没有自动更新功能，必须手动运行一次上方的安装命令来获取自动更新能力。
+
+### v0.3.4 更新内容
+
+- **修复国内模型下载失败**：嵌入模型改为从 GitHub Releases 下载（国内可达），不再依赖 HuggingFace
+- 首次运行自动下载 → 本地缓存 → 后续零网络依赖
+- 下载失败自动回退到 HuggingFace（支持 `HF_ENDPOINT` 镜像）
+- 下载过程带 3 次重试和进度日志
 
 ---
 
