@@ -2017,7 +2017,87 @@ const memoryPlugin = {
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
     /**
-     * Send a proactive message using the native gateway interface.
+     * Send a proactive message via runtime channel methods (direct fallback).
+     * Each channel exposes a sendMessage{Channel}(to, text, opts?) function
+     * through api.runtime.channel — these work even when the gateway's
+     * dispatchMessage callback is unavailable.
+     */
+    const sendViaRuntime = async (
+      channel: string,
+      to: string,
+      message: string,
+      accountId?: string,
+    ): Promise<boolean> => {
+      const rt = api.runtime?.channel;
+      if (!rt) return false;
+
+      const ch = channel.toLowerCase().replace(/[^a-z]/g, "");
+      const opts = accountId ? { accountId } : {};
+
+      try {
+        switch (ch) {
+          case "telegram": {
+            const fn = rt.telegram?.sendMessageTelegram;
+            if (!fn) return false;
+            await fn(to, message, opts);
+            return true;
+          }
+          case "whatsapp":
+          case "web": {
+            const fn = rt.whatsapp?.sendMessageWhatsApp;
+            if (!fn) return false;
+            await fn(to, message, { verbose: false, ...opts });
+            return true;
+          }
+          case "discord": {
+            const fn = rt.discord?.sendMessageDiscord;
+            if (!fn) return false;
+            await fn(to, message, opts);
+            return true;
+          }
+          case "signal": {
+            const fn = rt.signal?.sendMessageSignal;
+            if (!fn) return false;
+            await fn(to, message, opts);
+            return true;
+          }
+          case "slack": {
+            const fn = rt.slack?.sendMessageSlack;
+            if (!fn) return false;
+            await fn(to, message, opts);
+            return true;
+          }
+          case "imessage": {
+            const fn = rt.imessage?.sendMessageIMessage;
+            if (!fn) return false;
+            await fn(to, message, opts);
+            return true;
+          }
+          case "line": {
+            const fn = rt.line?.sendMessageLine;
+            if (!fn) return false;
+            await fn(to, message, opts);
+            return true;
+          }
+          default:
+            api.logger.debug?.(
+              `openclaw-mem0: runtime fallback — unsupported channel "${channel}"`,
+            );
+            return false;
+        }
+      } catch (err) {
+        api.logger.debug?.(
+          `openclaw-mem0: runtime.${channel} send failed: ${String(err)}`,
+        );
+        return false;
+      }
+    };
+
+    /**
+     * Send a proactive message using a two-tier delivery strategy:
+     *   1. api.sendMessage()  — official plugin API (gateway dispatchMessage)
+     *   2. runtime channel methods — direct channel-specific send functions
+     * Falls back to next-turn context injection if both tiers fail.
      */
     const deliverProactiveMessage = async (action: PendingAction): Promise<boolean> => {
       // Resolve target: config overrides > auto-detected
@@ -2029,38 +2109,59 @@ const memoryPlugin = {
         api.logger.info(
           `openclaw-mem0: ⏳ proactive action queued for next-turn (no target — channel=${channel ?? "?"}, to=${target ?? "?"})`,
         );
-        // Un-fire so it stays in the queue for next-turn injection
         action.fired = false;
         return false;
       }
 
+      // ── Tier 1: api.sendMessage (gateway dispatchMessage) ──
+      if (typeof api.sendMessage === "function") {
+        try {
+          const result = await api.sendMessage({
+            channel,
+            to: target,
+            message: action.message,
+            accountId: lastActiveAccountId,
+          });
+
+          if (result.ok) {
+            api.logger.info(
+              `openclaw-mem0: ✅ proactive message sent via api.sendMessage (${channel} → ${target})`,
+            );
+            return true;
+          }
+
+          // Not a hard failure — try tier 2
+          api.logger.debug?.(
+            `openclaw-mem0: api.sendMessage returned error: ${result.error ?? "unknown"}, trying runtime fallback...`,
+          );
+        } catch (err) {
+          api.logger.debug?.(
+            `openclaw-mem0: api.sendMessage threw: ${String(err)}, trying runtime fallback...`,
+          );
+        }
+      }
+
+      // ── Tier 2: runtime channel-specific send methods ──
       try {
-        if (!api.sendMessage) {
-          throw new Error("api.sendMessage not available (requires updated core SDK)");
+        const sent = await sendViaRuntime(channel, target, action.message, lastActiveAccountId);
+        if (sent) {
+          api.logger.info(
+            `openclaw-mem0: ✅ proactive message sent via runtime.${channel} → ${target}`,
+          );
+          return true;
         }
-
-        const result = await api.sendMessage({
-          channel,
-          to: target,
-          message: action.message,
-          accountId: lastActiveAccountId,
-        });
-
-        if (!result.ok) {
-          throw new Error(result.error ?? "Unknown error");
-        }
-
-        api.logger.info(
-          `openclaw-mem0: ✅ proactive message sent via ${channel} → ${target}: "${action.message}"`,
-        );
-        return true;
       } catch (err) {
-        api.logger.warn(
-          `openclaw-mem0: send failed: ${String(err)} — falling back to next-turn`,
+        api.logger.debug?.(
+          `openclaw-mem0: runtime fallback failed: ${String(err)}`,
         );
-        action.fired = false;
-        return false;
       }
+
+      // ── Both tiers failed — queue for next-turn injection ──
+      api.logger.warn(
+        `openclaw-mem0: proactive delivery failed (${channel} → ${target}) — falling back to next-turn injection`,
+      );
+      action.fired = false;
+      return false;
     };
 
     // ========================================================================
@@ -2068,7 +2169,7 @@ const memoryPlugin = {
     // ========================================================================
 
     const GITHUB_REPO = "1960697431/openclaw-mem0";
-    const LOCAL_VERSION = "0.3.6"; // Keep in sync with package.json
+    const LOCAL_VERSION = "0.3.7"; // Keep in sync with package.json
 
     const checkForUpdates = async () => {
       const { execSync } = await import("node:child_process");
