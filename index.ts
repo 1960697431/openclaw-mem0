@@ -354,6 +354,7 @@ type PendingAction = {
   createdAt: number;
   triggerAt: number; // Unix timestamp (ms) when this action should fire
   fired: boolean;
+  deliveryAttempts?: number; // Track failed push delivery attempts
 };
 
 /**
@@ -766,6 +767,11 @@ class OSSProvider implements Mem0Provider {
 
     const config: Record<string, unknown> = { version: "v1.1" };
 
+    // Resolve embedder dimension for auto-configuring vectorStore
+    // Qwen3-Embedding-0.6B-ONNX = 1024 dims, mem0ai default = 1536
+    const embedderDims = this.ossConfig?.embedder?.config?.embeddingDims
+      ?? (this.ossConfig?.embedder?.provider?.toLowerCase() === "transformersjs" ? 1024 : undefined);
+
     if (this.ossConfig?.embedder) config.embedder = this.ossConfig.embedder;
     if (this.ossConfig?.vectorStore) {
       // Deep clone vectorStore config and resolve dbPath if present
@@ -773,7 +779,20 @@ class OSSProvider implements Mem0Provider {
       if (vectorStore.config?.dbPath && this.resolvePath) {
         vectorStore.config.dbPath = this.resolvePath(vectorStore.config.dbPath);
       }
+      // Auto-set dimension if not explicitly configured
+      if (!vectorStore.config?.dimension && embedderDims) {
+        vectorStore.config = vectorStore.config || {};
+        vectorStore.config.dimension = embedderDims;
+        this.logger?.info(`[mem0] Auto-set vectorStore dimension to ${embedderDims} (matching embedder)`);
+      }
       config.vectorStore = vectorStore;
+    } else if (embedderDims) {
+      // No vectorStore configured at all — set default with correct dimension
+      config.vectorStore = {
+        provider: "memory",
+        config: { dimension: embedderDims },
+      };
+      this.logger?.info(`[mem0] Auto-configured vectorStore with dimension ${embedderDims}`);
     }
     if (this.ossConfig?.llm) config.llm = this.ossConfig.llm;
 
@@ -2049,7 +2068,7 @@ const memoryPlugin = {
     // ========================================================================
 
     const GITHUB_REPO = "1960697431/openclaw-mem0";
-    const LOCAL_VERSION = "0.3.5"; // Keep in sync with package.json
+    const LOCAL_VERSION = "0.3.6"; // Keep in sync with package.json
 
     const checkForUpdates = async () => {
       const { execSync } = await import("node:child_process");
@@ -2163,7 +2182,16 @@ const memoryPlugin = {
         heartbeatTimer = setInterval(async () => {
           const action = reflectionEngine.checkPendingActions();
           if (action) {
-            await deliverProactiveMessage(action);
+            // Skip push delivery if already failed 2+ times (avoids 405 log spam);
+            // the action will still be injected on next user turn via before_agent_start.
+            if ((action.deliveryAttempts ?? 0) >= 2) {
+              action.fired = false; // keep available for next-turn injection
+              return;
+            }
+            const ok = await deliverProactiveMessage(action);
+            if (!ok) {
+              action.deliveryAttempts = (action.deliveryAttempts ?? 0) + 1;
+            }
           }
         }, 60_000);
       },
