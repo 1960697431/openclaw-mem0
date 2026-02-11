@@ -31,8 +31,14 @@ class TransformersJsEmbedder {
   private model: string;
   private embeddingDims: number;
 
+  // Default model — hosted on GitHub Releases for network-friendly access
+  private static readonly DEFAULT_MODEL = "onnx-community/Qwen3-Embedding-0.6B-ONNX";
+  private static readonly GITHUB_REPO = "1960697431/openclaw-mem0";
+  private static readonly GITHUB_MODEL_TAG = "models-v1";
+  private static readonly MODEL_ARCHIVE = "qwen3-embedding-0.6b-q8.tar.gz";
+
   constructor(config: { model?: string; embeddingDims?: number }) {
-    this.model = config.model || "onnx-community/Qwen3-Embedding-0.6B-ONNX";
+    this.model = config.model || TransformersJsEmbedder.DEFAULT_MODEL;
     this.embeddingDims = config.embeddingDims || 1024;
   }
 
@@ -43,10 +49,165 @@ class TransformersJsEmbedder {
     return this.initPromise;
   }
 
+  /**
+   * Resolve the plugin directory from import.meta.url.
+   */
+  private async getPluginDir(): Promise<string> {
+    const { fileURLToPath } = await import("node:url");
+    const { dirname } = await import("node:path");
+    return dirname(fileURLToPath(import.meta.url));
+  }
+
+  /**
+   * Get the local model cache directory.
+   * Structure: {pluginDir}/models/{model-slug}/
+   */
+  private async getModelCacheDir(): Promise<string> {
+    const { join } = await import("node:path");
+    const pluginDir = await this.getPluginDir();
+    return join(pluginDir, "models", this.model.replace(/\//g, "--"));
+  }
+
+  /**
+   * Ensure the default model is available locally.
+   * Downloads from GitHub Releases on first run, then caches permanently.
+   * Returns the local directory path to pass to transformers.js pipeline().
+   */
+  private async ensureModelLocal(): Promise<string> {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+
+    const cacheDir = await this.getModelCacheDir();
+    const marker = path.join(cacheDir, ".download-complete");
+
+    // Already downloaded — use local cache
+    if (fs.existsSync(marker)) {
+      console.log(`[mem0] Model cached locally.`);
+      return cacheDir;
+    }
+
+    // Download from GitHub Releases
+    const baseUrl = `https://github.com/${TransformersJsEmbedder.GITHUB_REPO}/releases/download/${TransformersJsEmbedder.GITHUB_MODEL_TAG}`;
+    const archiveUrl = `${baseUrl}/${TransformersJsEmbedder.MODEL_ARCHIVE}`;
+
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const archivePath = path.join(cacheDir, TransformersJsEmbedder.MODEL_ARCHIVE);
+
+    console.log(`[mem0] Downloading model from GitHub Releases...`);
+    console.log(`[mem0] URL: ${archiveUrl}`);
+    await this.downloadFile(archiveUrl, archivePath);
+
+    console.log(`[mem0] Extracting model archive...`);
+    const { execSync } = await import("node:child_process");
+    execSync(`tar xzf "${archivePath}" -C "${cacheDir}"`, {
+      timeout: 120_000,
+    });
+
+    // Clean up the archive to save disk space
+    try { fs.unlinkSync(archivePath); } catch { /* ignore */ }
+
+    // Write download-complete marker
+    fs.writeFileSync(marker, new Date().toISOString());
+    console.log(`[mem0] Model download and extraction complete.`);
+
+    return cacheDir;
+  }
+
+  /**
+   * Download a file from URL to a local path with retry and progress logging.
+   * Handles GitHub Releases redirects and large files (700MB+).
+   */
+  private async downloadFile(url: string, dest: string, retries = 3): Promise<void> {
+    const fs = await import("node:fs");
+
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        const resp = await fetch(url, {
+          redirect: "follow",
+          signal: AbortSignal.timeout(1_800_000), // 30 min timeout for large models
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+
+        const reader = resp.body?.getReader();
+        if (!reader) throw new Error("No response body");
+
+        const ws = fs.createWriteStream(dest);
+        const total = parseInt(resp.headers.get("content-length") || "0", 10);
+        let downloaded = 0;
+        let lastPct = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          ws.write(Buffer.from(value));
+          downloaded += value.length;
+
+          // Log progress every 10% for files > 1MB
+          if (total > 1_000_000) {
+            const pct = Math.floor((downloaded / total) * 100);
+            if (pct >= lastPct + 10) {
+              console.log(
+                `[mem0]   ${pct}% (${(downloaded / 1048576).toFixed(1)} MB / ${(total / 1048576).toFixed(1)} MB)`,
+              );
+              lastPct = pct;
+            }
+          }
+        }
+
+        await new Promise<void>((resolve, reject) => {
+          ws.end(() => resolve());
+          ws.on("error", reject);
+        });
+
+        return; // Success
+      } catch (err) {
+        // Clean up partial download
+        try { (await import("node:fs")).unlinkSync(dest); } catch { /* ignore */ }
+
+        if (attempt === retries) throw err;
+        console.warn(`[mem0] Download attempt ${attempt}/${retries} failed: ${String(err)}`);
+        console.log(`[mem0] Retrying in 5s...`);
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    }
+  }
+
   private async _init(): Promise<void> {
     console.log(`[mem0] Loading transformers.js model: ${this.model}...`);
-    const { pipeline } = await import("@huggingface/transformers");
-    this.extractor = await pipeline("feature-extraction", this.model, {
+    const transformers = await import("@huggingface/transformers");
+    const { pipeline, env } = transformers;
+
+    let modelPath: string = this.model;
+
+    // For the default model, try GitHub Releases first (accessible in China)
+    if (this.model === TransformersJsEmbedder.DEFAULT_MODEL) {
+      try {
+        modelPath = await this.ensureModelLocal();
+      } catch (err) {
+        console.warn(`[mem0] GitHub Release download failed: ${String(err)}`);
+        console.log(`[mem0] Falling back to HuggingFace...`);
+        // Fall back to HF download with optional mirror
+        const hfMirror = process.env.HF_ENDPOINT || process.env.HF_MIRROR;
+        if (hfMirror) {
+          env.remoteHost = hfMirror;
+          console.log(`[mem0] Using HuggingFace mirror: ${hfMirror}`);
+        }
+      }
+    } else {
+      // Custom model — use HuggingFace with optional mirror
+      const hfMirror = process.env.HF_ENDPOINT || process.env.HF_MIRROR;
+      if (hfMirror) {
+        env.remoteHost = hfMirror;
+        console.log(`[mem0] Using HuggingFace mirror: ${hfMirror}`);
+      }
+    }
+
+    // Allow users to specify a local cache directory for models
+    if (process.env.HF_HOME) {
+      env.cacheDir = process.env.HF_HOME;
+    }
+
+    this.extractor = await pipeline("feature-extraction", modelPath, {
       dtype: "q8", // Quantized version (~700MB vs 2.4GB)
     });
     console.log(`[mem0] Model loaded successfully.`);

@@ -17,5 +17,8 @@ Thumbs.db
 # Build outputs
 dist/
 
+# Local model cache (downloaded from GitHub Releases at runtime)
+models/
+
 # Lock files (optional - some prefer to commit these)
 # package-lock.json
