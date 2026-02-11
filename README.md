@@ -395,9 +395,23 @@ openclaw mem0 list                       # 列出所有
 
 - 不依赖 `npm` 或 `openclaw plugins update`
 - 只要 GitHub 版本号 > 本地版本号 → 自动下载覆盖
-- **当前版本：`v0.3.4`**
+- **当前版本：`v0.3.8`**
 
 > ⚠️ 旧版本（v0.2.x 及以下）没有自动更新功能，必须手动运行一次上方的安装命令来获取自动更新能力。
+
+### v0.3.8 更新内容
+
+- **添加 `openclaw mem0 list` CLI 命令**：列出所有记忆，支持 `--scope` 和 `--limit` 参数
+- **修复主动大脑消息投递**：采用两层投递策略（api.sendMessage → runtime channel 直接发送），兼容所有 OpenClaw 版本
+- 支持 Telegram、WhatsApp、Discord、Signal、Slack、iMessage、LINE 七渠道直接推送
+
+### v0.3.6 更新内容
+
+- **修复向量维度不匹配**：自动检测 embedder 维度并同步到 vectorStore 配置
+
+### v0.3.5 更新内容
+
+- **修复模型文件缺失**：重新打包模型 tar.gz，包含所有必需配置文件
 
 ### v0.3.4 更新内容
 

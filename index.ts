@@ -1783,6 +1783,79 @@ const memoryPlugin = {
           });
 
         mem0
+          .command("list")
+          .description("List all stored memories")
+          .option("--limit <n>", "Max items to display", "50")
+          .option("--scope <scope>", 'Memory scope: "session", "long-term", or "all"', "all")
+          .action(async (opts: { limit: string; scope: string }) => {
+            try {
+              const limit = parseInt(opts.limit, 10);
+              const scope = opts.scope as "session" | "long-term" | "all";
+              const uid = cfg.userId;
+              let memories: MemoryItem[] = [];
+
+              if (scope === "session" || scope === "all") {
+                if (currentSessionId) {
+                  const sessionMems = await provider.getAll({
+                    user_id: uid,
+                    run_id: currentSessionId,
+                  });
+                  if (Array.isArray(sessionMems)) {
+                    memories.push(
+                      ...sessionMems.map((m) => ({ ...m, _scope: "session" as const })),
+                    );
+                  }
+                } else if (scope === "session") {
+                  console.log("No active session ID for session-scoped list.");
+                  return;
+                }
+              }
+
+              if (scope === "long-term" || scope === "all") {
+                const longTermMems = await provider.getAll({ user_id: uid });
+                if (Array.isArray(longTermMems)) {
+                  memories.push(
+                    ...longTermMems.map((m) => ({ ...m, _scope: "long-term" as const })),
+                  );
+                }
+              }
+
+              // Deduplicate by ID
+              if (scope === "all") {
+                const seen = new Set<string>();
+                memories = memories.filter((m) => {
+                  if (seen.has(m.id)) return false;
+                  seen.add(m.id);
+                  return true;
+                });
+              }
+
+              const display = memories.slice(0, limit);
+
+              if (!display.length) {
+                console.log("No memories found.");
+                return;
+              }
+
+              console.log(`Showing ${display.length} of ${memories.length} memories (user: ${uid}):\n`);
+              for (const m of display) {
+                const scope = (m as any)._scope ?? "?";
+                const date = m.created_at
+                  ? new Date(m.created_at).toLocaleDateString()
+                  : "?";
+                console.log(`  [${scope}] ${m.memory}`);
+                console.log(`    id=${m.id}  created=${date}  categories=${(m.categories ?? []).join(",") || "none"}`);
+              }
+
+              if (memories.length > limit) {
+                console.log(`\n  ... and ${memories.length - limit} more (use --limit to show more)`);
+              }
+            } catch (err) {
+              console.error(`List failed: ${String(err)}`);
+            }
+          });
+
+        mem0
           .command("stats")
           .description("Show memory statistics from Mem0")
           .action(async () => {
@@ -2169,7 +2242,7 @@ const memoryPlugin = {
     // ========================================================================
 
     const GITHUB_REPO = "1960697431/openclaw-mem0";
-    const LOCAL_VERSION = "0.3.7"; // Keep in sync with package.json
+    const LOCAL_VERSION = "0.3.8"; // Keep in sync with package.json
 
     const checkForUpdates = async () => {
       const { execSync } = await import("node:child_process");
