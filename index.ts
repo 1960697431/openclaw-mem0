@@ -575,7 +575,7 @@ class OSSProvider implements Mem0Provider {
     const self = this;
     LLMFactory.create = (provider: string, config: any) => {
       self.logger?.info(`[mem0] Initializing LLM provider: ${provider} with model: ${config?.model}`);
-      
+
       const llm = originalLLMCreate(provider, config);
 
       // Fix for OpenRouter: Inject required headers to prevent 401/Redirects
@@ -584,12 +584,12 @@ class OSSProvider implements Mem0Provider {
         const openaiClient = (llm as any).openai;
         // Ensure defaultHeaders exists
         if (!openaiClient.defaultHeaders) openaiClient.defaultHeaders = {};
-        
+
         Object.assign(openaiClient.defaultHeaders, {
           "HTTP-Referer": "https://github.com/1960697431/openclaw-mem0",
           "X-Title": "OpenClaw Mem0 Plugin",
         });
-        
+
         self.logger?.debug(`[mem0] Injected OpenRouter headers for OpenAI provider`);
       }
 
@@ -1830,8 +1830,7 @@ const memoryPlugin = {
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
     /**
-     * Attempt to send a proactive message via the Gateway's `send` method.
-     * Falls back to next-turn injection if no target is available.
+     * Send a proactive message using the native gateway interface.
      */
     const deliverProactiveMessage = async (action: PendingAction): Promise<boolean> => {
       // Resolve target: config overrides > auto-detected
@@ -1849,41 +1848,28 @@ const memoryPlugin = {
       }
 
       try {
-        // Call Gateway HTTP API to send outbound message
-        // Use configured port or fallback to env.PORT or default 3000
-        const gatewayPort = cfg.gatewayPort || Number(process.env.PORT) || 3000;
-        const response = await fetch(`http://127.0.0.1:${gatewayPort}/v1/gateway`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            method: "send",
-            params: {
-              to: target,
-              message: action.message,
-              channel,
-              ...(lastActiveAccountId ? { accountId: lastActiveAccountId } : {}),
-              idempotencyKey: action.id,
-            },
-          }),
+        if (!api.sendMessage) {
+          throw new Error("api.sendMessage not available (requires updated core SDK)");
+        }
+
+        const result = await api.sendMessage({
+          channel,
+          to: target,
+          message: action.message,
+          accountId: lastActiveAccountId,
         });
 
-        if (response.ok) {
-          api.logger.info(
-            `openclaw-mem0: ✅ proactive message sent via ${channel} → ${target}: "${action.message}"`,
-          );
-          return true;
-        } else {
-          const body = await response.text().catch(() => "(no body)");
-          api.logger.warn(
-            `openclaw-mem0: Gateway send failed (${response.status}): ${body} — falling back to next-turn`,
-          );
-          action.fired = false;
-          return false;
+        if (!result.ok) {
+          throw new Error(result.error ?? "Unknown error");
         }
+
+        api.logger.info(
+          `openclaw-mem0: ✅ proactive message sent via ${channel} → ${target}: "${action.message}"`,
+        );
+        return true;
       } catch (err) {
-        // Network/Gateway unavailable — leave for next-turn
-        api.logger.debug?.(
-          `openclaw-mem0: Gateway send error: ${String(err)} — queued for next-turn`,
+        api.logger.warn(
+          `openclaw-mem0: send failed: ${String(err)} — falling back to next-turn`,
         );
         action.fired = false;
         return false;
