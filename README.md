@@ -399,6 +399,12 @@ openclaw mem0 list                       # 列出所有
 
 > ⚠️ 旧版本（v0.2.x 及以下）没有自动更新功能，必须手动运行一次上方的安装命令来获取自动更新能力。
 
+### v0.3.10 更新内容
+
+- **修复飞书/钉钉等扩展渠道主动推送失败**：新增 Tier 3 CLI 投递层，对 `runtime.channel` 未暴露 `sendMessage` 方法的渠道（飞书、钉钉、Google Chat、MS Teams 等），自动降级为 `openclaw message send` CLI 子进程投递
+- 主动大脑投递策略升级为三层：api.sendMessage → runtime channel → CLI fallback
+- 支持所有 OpenClaw 内置与扩展渠道（telegram / whatsapp / discord / signal / slack / imessage / line / **feishu** / googlechat / msteams / dingtalk 等）
+
 ### v0.3.9 更新内容
 
 - **修复初始化失败后永久不可用**：模型下载/LLM 连接等初始化失败后，下次调用会自动重试而不是一直返回缓存的错误

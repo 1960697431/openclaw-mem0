@@ -2202,9 +2202,7 @@ const memoryPlugin = {
             return true;
           }
           default:
-            api.logger.debug?.(
-              `openclaw-mem0: runtime fallback — unsupported channel "${channel}"`,
-            );
+            // Channel not in runtime.channel — Tier 3 (CLI) will handle it
             return false;
         }
       } catch (err) {
@@ -2216,10 +2214,70 @@ const memoryPlugin = {
     };
 
     /**
-     * Send a proactive message using a two-tier delivery strategy:
-     *   1. api.sendMessage()  — official plugin API (gateway dispatchMessage)
+     * Tier 3: Send a proactive message via the `openclaw message send` CLI.
+     * This is the universal fallback — it works for ALL channels including
+     * bundled extensions (feishu, googlechat, msteams, …) and user-installed
+     * channel plugins (dingtalk-connector, …) that may not expose runtime
+     * sendMessage* helpers.
+     *
+     * Trade-off: spawns a short-lived subprocess, but proactive messages are
+     * infrequent so the overhead is negligible.
+     */
+    const sendViaCli = async (
+      channel: string,
+      to: string,
+      message: string,
+      accountId?: string,
+    ): Promise<boolean> => {
+      const { exec } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const execAsync = promisify(exec);
+
+      // Resolve the openclaw binary path — prefer the one that started the
+      // current process (works when running via npx/global install).
+      const cliBin = process.env.OPENCLAW_BIN || "openclaw";
+
+      // Build args array, then shell-quote manually.
+      // We use JSON for message to handle multi-line / special chars safely.
+      const args = [
+        "message", "send",
+        "--channel", channel,
+        "--target", to,
+        "--message", message,
+      ];
+      if (accountId) args.push("--account", accountId);
+
+      // Shell-escape each arg (wrap in single quotes, escape inner quotes)
+      const esc = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
+      const cmd = [esc(cliBin), ...args.map(esc)].join(" ");
+
+      try {
+        const { stdout, stderr } = await execAsync(cmd, {
+          timeout: 30_000,
+          env: { ...process.env, NO_COLOR: "1" },
+        });
+        // Check for obvious error indicators in stderr
+        if (stderr && /error|failed|not found/i.test(stderr)) {
+          api.logger.debug?.(
+            `openclaw-mem0: CLI send stderr: ${stderr.slice(0, 200)}`,
+          );
+        }
+        api.logger.debug?.(`openclaw-mem0: CLI send stdout: ${(stdout || "").slice(0, 200)}`);
+        return true;
+      } catch (err: any) {
+        api.logger.debug?.(
+          `openclaw-mem0: CLI send failed (exit=${err.code ?? "?"}): ${String(err.stderr || err.message).slice(0, 300)}`,
+        );
+        return false;
+      }
+    };
+
+    /**
+     * Send a proactive message using a three-tier delivery strategy:
+     *   1. api.sendMessage()      — official plugin API (gateway dispatchMessage)
      *   2. runtime channel methods — direct channel-specific send functions
-     * Falls back to next-turn context injection if both tiers fail.
+     *   3. openclaw message send   — CLI fallback for any channel (feishu, dingtalk, …)
+     * Falls back to next-turn context injection if all tiers fail.
      */
     const deliverProactiveMessage = async (action: PendingAction): Promise<boolean> => {
       // Resolve target: config overrides > auto-detected
@@ -2278,7 +2336,25 @@ const memoryPlugin = {
         );
       }
 
-      // ── Both tiers failed — queue for next-turn injection ──
+      // ── Tier 3: CLI fallback (openclaw message send) ──
+      try {
+        api.logger.debug?.(
+          `openclaw-mem0: runtime fallback unavailable for "${channel}", trying CLI...`,
+        );
+        const sent = await sendViaCli(channel, target, action.message, lastActiveAccountId);
+        if (sent) {
+          api.logger.info(
+            `openclaw-mem0: ✅ proactive message sent via CLI (${channel} → ${target})`,
+          );
+          return true;
+        }
+      } catch (err) {
+        api.logger.debug?.(
+          `openclaw-mem0: CLI fallback failed: ${String(err)}`,
+        );
+      }
+
+      // ── All tiers failed — queue for next-turn injection ──
       api.logger.warn(
         `openclaw-mem0: proactive delivery failed (${channel} → ${target}) — falling back to next-turn injection`,
       );
@@ -2291,7 +2367,7 @@ const memoryPlugin = {
     // ========================================================================
 
     const GITHUB_REPO = "1960697431/openclaw-mem0";
-    const LOCAL_VERSION = "0.3.9"; // Keep in sync with package.json
+    const LOCAL_VERSION = "0.3.10"; // Keep in sync with package.json
 
     const checkForUpdates = async () => {
       const { execSync } = await import("node:child_process");
