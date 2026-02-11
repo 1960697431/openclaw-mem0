@@ -46,7 +46,11 @@ class TransformersJsEmbedder {
   private async ensureExtractor(): Promise<void> {
     if (this.extractor) return;
     if (this.initPromise) return this.initPromise;
-    this.initPromise = this._init();
+    this.initPromise = this._init().catch((err) => {
+      // Reset so next call can retry instead of caching the rejection forever
+      this.initPromise = null;
+      throw err;
+    });
     return this.initPromise;
   }
 
@@ -139,32 +143,38 @@ class TransformersJsEmbedder {
         if (!reader) throw new Error("No response body");
 
         const ws = fs.createWriteStream(dest);
-        const total = parseInt(resp.headers.get("content-length") || "0", 10);
-        let downloaded = 0;
-        let lastPct = 0;
+        try {
+          const total = parseInt(resp.headers.get("content-length") || "0", 10);
+          let downloaded = 0;
+          let lastPct = 0;
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          ws.write(Buffer.from(value));
-          downloaded += value.length;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            ws.write(Buffer.from(value));
+            downloaded += value.length;
 
-          // Log progress every 10% for files > 1MB
-          if (total > 1_000_000) {
-            const pct = Math.floor((downloaded / total) * 100);
-            if (pct >= lastPct + 10) {
-              console.log(
-                `[mem0]   ${pct}% (${(downloaded / 1048576).toFixed(1)} MB / ${(total / 1048576).toFixed(1)} MB)`,
-              );
-              lastPct = pct;
+            // Log progress every 10% for files > 1MB
+            if (total > 1_000_000) {
+              const pct = Math.floor((downloaded / total) * 100);
+              if (pct >= lastPct + 10) {
+                console.log(
+                  `[mem0]   ${pct}% (${(downloaded / 1048576).toFixed(1)} MB / ${(total / 1048576).toFixed(1)} MB)`,
+                );
+                lastPct = pct;
+              }
             }
           }
-        }
 
-        await new Promise<void>((resolve, reject) => {
-          ws.end(() => resolve());
-          ws.on("error", reject);
-        });
+          await new Promise<void>((resolve, reject) => {
+            ws.end(() => resolve());
+            ws.on("error", reject);
+          });
+        } catch (streamErr) {
+          // Ensure the WriteStream is always closed on error
+          ws.destroy();
+          throw streamErr;
+        }
 
         return; // Success
       } catch (err) {
@@ -424,39 +434,72 @@ or
 
       const userPrompt = `Recent conversation:\n${conversationSummary}\n\nStored memories:\n${memorySummary}`;
 
-      // Call the LLM directly via OpenAI-compatible API
+      // Call the LLM directly — supports both OpenAI-compatible and Ollama APIs
       const llmCfg = this.llmConfig.config;
-      const baseURL = (llmCfg.baseURL as string) || "https://api.openai.com/v1";
-      const apiKey = (llmCfg.apiKey as string) || "";
+      const provider = this.llmConfig.provider?.toLowerCase() ?? "openai";
       const model = (llmCfg.model as string) || "gpt-4o";
 
-      const response = await fetch(`${baseURL}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: this.REFLECTION_PROMPT },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.3,
-          max_tokens: 200,
-        }),
-      });
+      let responseText = "";
 
-      if (!response.ok) {
-        this.logger?.debug?.(`openclaw-mem0: reflection LLM returned ${response.status}`);
-        return;
+      if (provider === "ollama") {
+        // Ollama uses /api/chat, not /v1/chat/completions
+        const ollamaUrl = (llmCfg.url as string) || "http://127.0.0.1:11434";
+        const response = await fetch(`${ollamaUrl}/api/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: this.REFLECTION_PROMPT },
+              { role: "user", content: userPrompt },
+            ],
+            stream: false,
+            options: { temperature: 0.3 },
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+
+        if (!response.ok) {
+          this.logger?.debug?.(`openclaw-mem0: reflection Ollama returned ${response.status}`);
+          return;
+        }
+
+        const data = (await response.json()) as any;
+        responseText = data?.message?.content ?? "";
+      } else {
+        // OpenAI-compatible API (DeepSeek, Kimi, GLM, etc.)
+        const baseURL = (llmCfg.baseURL as string) || "https://api.openai.com/v1";
+        const apiKey = (llmCfg.apiKey as string) || "";
+
+        const response = await fetch(`${baseURL}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: "system", content: this.REFLECTION_PROMPT },
+              { role: "user", content: userPrompt },
+            ],
+            temperature: 0.3,
+            max_tokens: 200,
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+
+        if (!response.ok) {
+          this.logger?.debug?.(`openclaw-mem0: reflection LLM returned ${response.status}`);
+          return;
+        }
+
+        const data = (await response.json()) as any;
+        responseText = data?.choices?.[0]?.message?.content ?? "";
       }
 
-      const data = (await response.json()) as any;
-      let content = data?.choices?.[0]?.message?.content ?? "";
-
       // Strip markdown code blocks if present
-      content = content.trim();
+      let content = responseText.trim();
       const codeBlockMatch = content.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
       if (codeBlockMatch) content = codeBlockMatch[1].trim();
 
@@ -630,7 +673,10 @@ class PlatformProvider implements Mem0Provider {
   private async ensureClient(): Promise<void> {
     if (this.client) return;
     if (this.initPromise) return this.initPromise;
-    this.initPromise = this._init();
+    this.initPromise = this._init().catch((err) => {
+      this.initPromise = null;
+      throw err;
+    });
     return this.initPromise;
   }
 
@@ -717,7 +763,10 @@ class OSSProvider implements Mem0Provider {
   private async ensureMemory(): Promise<void> {
     if (this.memory) return;
     if (this.initPromise) return this.initPromise;
-    this.initPromise = this._init();
+    this.initPromise = this._init().catch((err) => {
+      this.initPromise = null;
+      throw err;
+    });
     return this.initPromise;
   }
 
@@ -2242,7 +2291,7 @@ const memoryPlugin = {
     // ========================================================================
 
     const GITHUB_REPO = "1960697431/openclaw-mem0";
-    const LOCAL_VERSION = "0.3.8"; // Keep in sync with package.json
+    const LOCAL_VERSION = "0.3.9"; // Keep in sync with package.json
 
     const checkForUpdates = async () => {
       const { execSync } = await import("node:child_process");
@@ -2276,12 +2325,36 @@ const memoryPlugin = {
           return;
         }
 
+        // Semver comparison: only update if remote is strictly newer
+        const parseVer = (v: string) => v.replace(/^v/, "").split(".").map(Number);
+        const local = parseVer(LOCAL_VERSION);
+        const remote = parseVer(remoteVersion);
+        const isNewer = remote[0] > local[0]
+          || (remote[0] === local[0] && remote[1] > local[1])
+          || (remote[0] === local[0] && remote[1] === local[1] && remote[2] > local[2]);
+
+        if (!isNewer) {
+          api.logger.debug?.(
+            `openclaw-mem0: local v${LOCAL_VERSION} >= remote v${remoteVersion}, skipping`,
+          );
+          return;
+        }
+
         // Step 2: New version found — download updated files
         api.logger.warn(
           `openclaw-mem0: ⬆️ 发现新版本 v${remoteVersion} (当前 v${LOCAL_VERSION})，正在自动更新...`,
         );
 
         try {
+          // Read local package.json BEFORE overwriting to compare dependencies later
+          let localDepsJson = "{}";
+          try {
+            const localPkg = JSON.parse(
+              readFileSync(join(pluginDir, "package.json"), "utf-8"),
+            ) as { dependencies?: Record<string, string> };
+            localDepsJson = JSON.stringify(localPkg.dependencies ?? {});
+          } catch { /* first install, treat as changed */ }
+
           // Download core files from GitHub raw
           const filesToUpdate = ["index.ts", "package.json", "README.md", "openclaw.plugin.json"];
           for (const file of filesToUpdate) {
@@ -2297,17 +2370,8 @@ const memoryPlugin = {
           }
 
           // Check if dependencies changed — only run npm install if needed
-          let needsNpmInstall = false;
-          try {
-            const localPkg = JSON.parse(
-              readFileSync(join(pluginDir, "package.json"), "utf-8"),
-            ) as { dependencies?: Record<string, string> };
-            const localDeps = JSON.stringify(localPkg.dependencies ?? {});
-            const remoteDeps = JSON.stringify(remotePkg.dependencies ?? {});
-            needsNpmInstall = localDeps !== remoteDeps;
-          } catch {
-            needsNpmInstall = true;
-          }
+          const remoteDepsJson = JSON.stringify(remotePkg.dependencies ?? {});
+          const needsNpmInstall = localDepsJson !== remoteDepsJson;
 
           if (needsNpmInstall) {
             api.logger.info("openclaw-mem0: 📦 依赖有变化，正在安装...");
@@ -2323,11 +2387,16 @@ const memoryPlugin = {
             `openclaw-mem0: 🔄 更新完成 v${LOCAL_VERSION} → v${remoteVersion}，Gateway 将在 10 秒后自动重启...`,
           );
 
-          // Step 3: Graceful restart — wait 10s then exit
-          // launchd will automatically restart the Gateway process
+          // Step 3: Graceful restart — wait 10s then signal the process
+          // Both launchd (macOS) and systemd (Linux) will auto-restart on SIGHUP/exit(1)
           setTimeout(() => {
             api.logger.warn("openclaw-mem0: 🔄 正在重启 Gateway 以加载新版本...");
-            process.exit(0);
+            try {
+              process.kill(process.pid, "SIGHUP");
+            } catch {
+              // Fallback: exit with code 1 to trigger restart supervisors
+              process.exit(1);
+            }
           }, 10_000);
 
         } catch (updateErr) {
