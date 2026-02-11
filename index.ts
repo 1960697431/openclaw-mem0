@@ -34,8 +34,9 @@ class TransformersJsEmbedder {
   // Default model — hosted on GitHub Releases for network-friendly access
   private static readonly DEFAULT_MODEL = "onnx-community/Qwen3-Embedding-0.6B-ONNX";
   private static readonly GITHUB_REPO = "1960697431/openclaw-mem0";
-  private static readonly GITHUB_MODEL_TAG = "models-v1";
+  private static readonly GITHUB_MODEL_TAG = "models-v2";
   private static readonly MODEL_ARCHIVE = "qwen3-embedding-0.6b-q8.tar.gz";
+  private static readonly MODEL_VERSION = "v2"; // Bump when re-packaging model
 
   constructor(config: { model?: string; embeddingDims?: number }) {
     this.model = config.model || TransformersJsEmbedder.DEFAULT_MODEL;
@@ -80,10 +81,16 @@ class TransformersJsEmbedder {
     const cacheDir = await this.getModelCacheDir();
     const marker = path.join(cacheDir, ".download-complete");
 
-    // Already downloaded — use local cache
+    // Already downloaded — use local cache (check version marker matches)
     if (fs.existsSync(marker)) {
-      console.log(`[mem0] Model cached locally.`);
-      return cacheDir;
+      const markerContent = fs.readFileSync(marker, "utf-8").trim();
+      if (markerContent.startsWith(TransformersJsEmbedder.MODEL_VERSION + "|") || markerContent === TransformersJsEmbedder.MODEL_VERSION) {
+        console.log(`[mem0] Model cached locally.`);
+        return cacheDir;
+      }
+      // Old/incompatible cache — delete and re-download
+      console.log(`[mem0] Model cache outdated, re-downloading...`);
+      fs.rmSync(cacheDir, { recursive: true, force: true });
     }
 
     // Download from GitHub Releases
@@ -106,8 +113,8 @@ class TransformersJsEmbedder {
     // Clean up the archive to save disk space
     try { fs.unlinkSync(archivePath); } catch { /* ignore */ }
 
-    // Write download-complete marker
-    fs.writeFileSync(marker, new Date().toISOString());
+    // Write download-complete marker with version
+    fs.writeFileSync(marker, `${TransformersJsEmbedder.MODEL_VERSION}|${new Date().toISOString()}`);
     console.log(`[mem0] Model download and extraction complete.`);
 
     return cacheDir;
@@ -2042,7 +2049,7 @@ const memoryPlugin = {
     // ========================================================================
 
     const GITHUB_REPO = "1960697431/openclaw-mem0";
-    const LOCAL_VERSION = "0.3.4"; // Keep in sync with package.json
+    const LOCAL_VERSION = "0.3.5"; // Keep in sync with package.json
 
     const checkForUpdates = async () => {
       const { execSync } = await import("node:child_process");
