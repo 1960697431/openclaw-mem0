@@ -2042,7 +2042,7 @@ const memoryPlugin = {
     // ========================================================================
 
     const GITHUB_REPO = "1960697431/openclaw-mem0";
-    const LOCAL_VERSION = "0.3.2"; // Keep in sync with package.json
+    const LOCAL_VERSION = "0.3.4"; // Keep in sync with package.json
 
     const checkForUpdates = async () => {
       const { execSync } = await import("node:child_process");
