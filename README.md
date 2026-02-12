@@ -45,14 +45,9 @@
 ## ⚡ 3 分钟快速安装
 
 ### 1. 下载插件
+**使用一键安装脚本（推荐）：**
 ```bash
-curl -L https://github.com/1960697431/openclaw-mem0/archive/refs/heads/main.zip -o mem0.zip \
-  && unzip -o mem0.zip \
-  && mkdir -p ~/.openclaw/extensions/openclaw-mem0 \
-  && cp -r openclaw-mem0-main/* ~/.openclaw/extensions/openclaw-mem0/ \
-  && rm -rf openclaw-mem0-main mem0.zip \
-  && cd ~/.openclaw/extensions/openclaw-mem0 \
-  && npm install --production
+curl -sL https://raw.githubusercontent.com/1960697431/openclaw-mem0/main/install.sh | bash
 ```
 
 ### 2. 配置 `~/.openclaw/openclaw.json`
