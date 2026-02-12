@@ -616,6 +616,8 @@ const memoryPlugin = {
 
     if (cfg.autoCapture) {
       api.on("agent_end", async (event, ctx) => {
+        api.logger.debug?.(`[mem0] 收到对话结束事件 (success=${event.success}, msgs=${event.messages?.length})`);
+        
         if (!event.success || !event.messages?.length) return;
         const sessionId = (ctx as any)?.sessionKey;
         if (sessionId) currentSessionId = sessionId;
@@ -624,7 +626,10 @@ const memoryPlugin = {
           (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
         ).slice(-10);
 
-        if (!validMsgs.length) return;
+        if (!validMsgs.length) {
+          api.logger.debug?.(`[mem0] 没有有效的文本消息，跳过捕获`);
+          return;
+        }
 
         // ⚡️ Async Fire-and-Forget: Don't block the gateway response
         // 异步后台执行：不阻塞 Gateway 响应
@@ -635,6 +640,8 @@ const memoryPlugin = {
               api.logger.info(`[mem0] ✨ 已捕获 ${res.results.length} 条新记忆 (后台处理中)`);
               const memories = await provider.search(validMsgs.map((m: any) => m.content).join(" "), buildSearchOptions());
               reflectionEngine.reflect(validMsgs as any, memories);
+            } else {
+              api.logger.debug?.(`[mem0] LLM 未提取到新记忆 (认为信息量不足)`);
             }
           } catch (err) {
             api.logger.warn(`[mem0] 记忆捕获失败: ${err}`);
@@ -660,7 +667,7 @@ const memoryPlugin = {
             autoRecall: cfg.autoRecall,
             maxMemoryCount: cfg.maxMemoryCount,
           },
-          version: "0.5.2",
+          version: "0.5.5",
         };
         
         fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
