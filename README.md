@@ -5,7 +5,7 @@
 基于 Mem0 构建的下一代智能记忆系统，专为 OpenClaw 设计。
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.4.9-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.5.0-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/OpenClaw-2026.2+-green.svg" alt="OpenClaw" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-orange.svg" alt="License" />
 </p>
@@ -159,6 +159,12 @@ cat ~/.openclaw/data/mem0/mem0-status.json
 ---
 
 ## 🔄 版本历史
+
+### v0.5.0 (通用模型支持)
+- 🆕 **Universal LLM Support**: 支持所有 OpenAI 兼容的 LLM 提供商
+- 🐛 修复 MiniMax 等国产模型不支持 `response_format: json_object` 的问题
+- 🆕 自动检测提供商并应用 JSON 模式变通方案
+- ✅ 已测试：MiniMax、DeepSeek、Moonshot、智谱、零一万物
 
 ### v0.4.9 (零配置增强)
 - 🐛 修复 `{ "enabled": true }` 最小配置启动失败的问题
