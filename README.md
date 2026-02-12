@@ -63,7 +63,7 @@ curl -L https://github.com/1960697431/openclaw-mem0/archive/refs/heads/main.zip 
 }
 ```
 
-> 💡 `llm` 的配置决定了记忆提取的质量。推荐 DeepSeek（便宜好用）或 Ollama（纯本地）。详见下方 [LLM 配置大全](#-llm-配置大全)。
+> 💡 **智能配置修正**：v0.4.0+ 版本支持智能修正。如果你忘记写 `/v1` 或者搞错了 URL，插件会自动帮你修正！
 
 ### 第三步：重启 Gateway
 
@@ -104,35 +104,6 @@ Agent 基于记忆给出个性化回复
   │  └───────────────────────────────────────┘
 ```
 
-```mermaid
-flowchart LR
-    subgraph 用户对话
-        A[用户输入] --> B[AI 助手]
-        B --> C[AI 回复]
-    end
-    
-    subgraph "自动回忆 Auto-Recall"
-        A --> D{语义搜索}
-        D --> E[(向量数据库)]
-        E --> F[相关记忆]
-        F --> B
-        I["💡 主动洞察"] --> B
-    end
-    
-    subgraph "自动捕获 Auto-Capture"
-        C --> G[LLM 提取事实]
-        G --> H{去重/合并}
-        H --> E
-    end
-
-    subgraph "🧠 活跃大脑 Active Brain"
-        H --> J["反思引擎 Reflect"]
-        J --> K{发现意图?}
-        K -->|是| I
-        K -->|否| L["静默"]
-    end
-```
-
 **核心概念：**
 - **嵌入模型 (Embedder)** = 图书管理员 — 负责搜索和召回，完全本地运行，零外部依赖
 - **LLM** = 智能秘书 — 负责从对话中提取重要事实，需要配置 API
@@ -166,6 +137,9 @@ flowchart LR
 - 📋 "帮我跟进这个问题" → 生成跟进任务
 - 💡 "我应该…" → 捕获行动意图
 
+**持久化存储** (v0.4.0+)：
+所有的待办事项和提醒都会保存到本地文件 (`mem0-actions.json`)，即使你重启了 OpenClaw，你的 AI 助手也不会忘记之前答应过你的事情。
+
 **三级投递策略**（确保你不会错过）：
 
 | 级别 | 方式 | 说明 |
@@ -182,33 +156,33 @@ flowchart LR
 
 mem0 需要一个 LLM 来提取对话中的事实。以下是所有支持的配置方式：
 
-> ⚠️ **重要**：Ollama 用 `url`，其他所有 OpenAI 兼容接口用 `baseURL`。搞混会连接失败！
+> ⚠️ **v0.4.0 更新**：插件现在会自动检测并修正 DeepSeek、Moonshot 等国产模型的 URL 配置错误，你再也不用担心漏写 `/v1` 了！
 
 ### 配置速查表
 
 | 供应商 | provider | 模型示例 | 特别说明 |
 |--------|----------|---------|---------| 
-| **DeepSeek** ⭐ | `openai` | `deepseek-chat` | 国内推荐，便宜好用 |
-| **Ollama** (本地) | `ollama` | `qwen3:32b` | 用 `url` 不是 `baseURL` |
-| OpenAI | `openai` | `gpt-4o` | 无需 baseURL |
-| 通义千问 | `openai` | `qwen-plus` | 阿里云 DashScope |
-| Kimi | `openai` | `moonshot-v1-8k` | 月之暗面 |
-| 智谱AI | `openai` | `glm-4-flash` | 免费可用 |
-| 硅基流动 | `openai` | `deepseek-ai/DeepSeek-V3` | 聚合多家模型 |
-| 零一万物 | `openai` | `yi-lightning` | 01.AI |
+| **DeepSeek** ⭐ | `deepseek` | `deepseek-chat` | 自动补全 `/v1` |
+| **Ollama** (本地) | `ollama` | `qwen3:32b` | 本地推荐 |
+| **Moonshot** | `moonshot` | `moonshot-v1-8k` | Kimi |
+| **Yi** | `yi` | `yi-lightning` | 零一万物 |
+| **SiliconFlow** | `siliconflow` | `deepseek-ai/DeepSeek-V3` | 硅基流动 |
+| **DashScope** | `dashscope` | `qwen-plus` | 通义千问 |
+| **OpenAI** | `openai` | `gpt-4o` | 标准 |
 
 <details>
 <summary><strong>📋 各供应商详细配置（点击展开）</strong></summary>
 
 #### 🔥 DeepSeek（推荐国内用户）
 
+只需指定 `provider: "deepseek"`，无需手写 baseURL：
+
 ```json
 "llm": {
-  "provider": "openai",
+  "provider": "deepseek",
   "config": {
     "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
-    "model": "deepseek-chat",
-    "baseURL": "https://api.deepseek.com/v1"
+    "model": "deepseek-chat"
   }
 }
 ```
@@ -238,84 +212,6 @@ mem0 需要一个 LLM 来提取对话中的事实。以下是所有支持的配�
   "config": {
     "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
     "model": "gpt-4o"
-  }
-}
-```
-
-#### ☁️ 通义千问 / DashScope
-
-```json
-"llm": {
-  "provider": "openai",
-  "config": {
-    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
-    "model": "qwen-plus",
-    "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1"
-  }
-}
-```
-
-#### 🌙 Kimi / Moonshot
-
-```json
-"llm": {
-  "provider": "openai",
-  "config": {
-    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
-    "model": "moonshot-v1-8k",
-    "baseURL": "https://api.moonshot.cn/v1"
-  }
-}
-```
-
-#### 🧠 智谱AI / GLM
-
-```json
-"llm": {
-  "provider": "openai",
-  "config": {
-    "apiKey": "xxxxxxxxxxxxxxxxxxxxxxxx.xxxxxxxxxxxxxx",
-    "model": "glm-4-flash",
-    "baseURL": "https://open.bigmodel.cn/api/paas/v4"
-  }
-}
-```
-
-#### ⚡ 硅基流动 / SiliconFlow
-
-```json
-"llm": {
-  "provider": "openai",
-  "config": {
-    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
-    "model": "deepseek-ai/DeepSeek-V3",
-    "baseURL": "https://api.siliconflow.cn/v1"
-  }
-}
-```
-
-#### 🌟 零一万物 / 01.AI
-
-```json
-"llm": {
-  "provider": "openai",
-  "config": {
-    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
-    "model": "yi-lightning",
-    "baseURL": "https://api.lingyiwanwu.com/v1"
-  }
-}
-```
-
-#### 🔌 Antigravity Manager（本地代理）
-
-```json
-"llm": {
-  "provider": "openai",
-  "config": {
-    "apiKey": "你的密钥",
-    "model": "gemini-3-flash",
-    "baseURL": "http://localhost:8045/v1"
   }
 }
 ```
@@ -370,110 +266,22 @@ openclaw mem0 list                       # 列出所有
 
 ---
 
-## ❓ 常见问题
+## 🔄 版本历史
 
-| 问题 | 解决方案 |
-|------|---------|
-| **401 No cookie auth...** | 升级到 v0.3.1+（已修复 OpenRouter Headers） |
-| **Cannot find module...** | 运行 `npm install --production` |
-| **No memories found** | LLM 配置错误（检查 apiKey / baseURL） |
-| **Ollama 连不上** | 用 `url` 不是 `baseURL` |
-| **Proactive Message 失败** | 设置 `"gatewayPort": 你的端口` |
-| **ETIMEDOUT** | 国内网络访问 OpenAI 超时，换国产 API |
-| **首次启动很慢** | 正常 — 正在从 GitHub Releases 下载约 417MB 嵌入模型 |
-| **模型下载失败 (fetch failed)** | 模型默认从 GitHub 下载（国内可达）。如仍失败，可设置 `export HF_ENDPOINT=https://hf-mirror.com` 回退到 HuggingFace 镜像 |
-| **需要翻墙吗？** | 嵌入模型从 GitHub Releases 下载，不需要翻墙；LLM 取决于你的配置 |
-| **与官方记忆冲突吗？** | 不会，两者独立运行 |
-| **支持多用户吗？** | 支持，设置不同的 `userId` 即可 |
-| **记忆存在哪？** | `~/.openclaw/mem0-vectors.db` |
+### v0.4.0 (重大更新)
+- **架构重构**：完全模块化设计 (`src/`), 提升稳定性和可维护性。
+- **持久化大脑**：Active Brain 现在的待办事项会保存到磁盘，重启不丢失。
+- **智能配置**：新增 `deepseek`, `moonshot`, `yi`, `siliconflow` 等国产模型预设，自动修正 URL 错误。
+- **JSON 修复**：增强了对 LLM 返回非标准 JSON (Markdown 包裹) 的解析能力。
 
----
+### v0.3.10
+- 修复飞书/钉钉等扩展渠道主动推送失败。
 
-## 🔄 自动更新
-
-本插件内置**自我更新引擎**，每次 Gateway 启动时自动检查 GitHub 最新版本。
-
-- 不依赖 `npm` 或 `openclaw plugins update`
-- 只要 GitHub 版本号 > 本地版本号 → 自动下载覆盖
-- **当前版本：`v0.3.9`**
-
-> ⚠️ 旧版本（v0.2.x 及以下）没有自动更新功能，必须手动运行一次上方的安装命令来获取自动更新能力。
-
-### v0.3.10 更新内容
-
-- **修复飞书/钉钉等扩展渠道主动推送失败**：新增 Tier 3 CLI 投递层，对 `runtime.channel` 未暴露 `sendMessage` 方法的渠道（飞书、钉钉、Google Chat、MS Teams 等），自动降级为 `openclaw message send` CLI 子进程投递
-- 主动大脑投递策略升级为三层：api.sendMessage → runtime channel → CLI fallback
-- 支持所有 OpenClaw 内置与扩展渠道（telegram / whatsapp / discord / signal / slack / imessage / line / **feishu** / googlechat / msteams / dingtalk 等）
-
-### v0.3.9 更新内容
-
-- **修复初始化失败后永久不可用**：模型下载/LLM 连接等初始化失败后，下次调用会自动重试而不是一直返回缓存的错误
-- **修复自动更新依赖检测失效**：先读取本地 package.json 再覆盖，依赖变化时正确触发 npm install
-- **修复自动更新版本比较**：使用 semver 数字比较，避免本地更新版本被远程旧版覆盖
-- **修复反思引擎 Ollama 不兼容**：支持 Ollama 的 `/api/chat` 端点，不再只支持 OpenAI 格式
-- **修复下载中断资源泄漏**：模型下载中途失败时正确关闭文件写入流
-- **优化自动更新重启**：使用 SIGHUP 信号替代 process.exit(0)，兼容 systemd（Linux）和 launchd（macOS）
-- 为反思引擎的 LLM 请求添加 30 秒超时
-
-### v0.3.8 更新内容
-
-- **添加 `openclaw mem0 list` CLI 命令**：列出所有记忆，支持 `--scope` 和 `--limit` 参数
-- **修复主动大脑消息投递**：采用两层投递策略（api.sendMessage → runtime channel 直接发送），兼容所有 OpenClaw 版本
-- 支持 Telegram、WhatsApp、Discord、Signal、Slack、iMessage、LINE 七渠道直接推送
-
-### v0.3.6 更新内容
-
-- **修复向量维度不匹配**：自动检测 embedder 维度并同步到 vectorStore 配置
-
-### v0.3.5 更新内容
-
-- **修复模型文件缺失**：重新打包模型 tar.gz，包含所有必需配置文件
-
-### v0.3.4 更新内容
-
-- **修复国内模型下载失败**：嵌入模型改为从 GitHub Releases 下载（国内可达），不再依赖 HuggingFace
-- 首次运行自动下载 → 本地缓存 → 后续零网络依赖
-- 下载失败自动回退到 HuggingFace（支持 `HF_ENDPOINT` 镜像）
-- 下载过程带 3 次重试和进度日志
+### v0.3.4
+- 修复国内模型下载失败，改为从 GitHub Releases 下载。
 
 ---
 
 ## 📄 License
 
 Apache 2.0
-
----
-
-<details>
-<summary><strong>🇬🇧 English Documentation</strong></summary>
-
-## What is this?
-
-Long-term memory plugin for [OpenClaw](https://github.com/openclaw/openclaw) agents, powered by [Mem0](https://mem0.ai).
-
-Your agent forgets everything between sessions. This plugin fixes that. It watches conversations, extracts what matters, and brings it back when relevant — automatically.
-
-### Features
-
-- **Auto-Recall** — Injects relevant memories before each response
-- **Auto-Capture** — Extracts and stores facts after each exchange
-- **Active Brain** — Proactive reminders and intent detection
-- **Local Embeddings** — Run ONNX models locally via transformers.js (zero dependencies)
-- **Multi-language** — Qwen3 supports 100+ languages
-- **Token Efficient** — Only Top-K semantic matches, constant cost regardless of memory size
-
-### Quick Start
-
-```bash
-curl -L https://github.com/1960697431/openclaw-mem0/archive/refs/heads/main.zip -o mem0.zip \
-  && unzip -o mem0.zip \
-  && mkdir -p ~/.openclaw/extensions/openclaw-mem0 \
-  && cp -r openclaw-mem0-main/* ~/.openclaw/extensions/openclaw-mem0/ \
-  && rm -rf openclaw-mem0-main mem0.zip \
-  && cd ~/.openclaw/extensions/openclaw-mem0 \
-  && npm install --production
-```
-
-See the Chinese documentation above for detailed configuration.
-
-</details>

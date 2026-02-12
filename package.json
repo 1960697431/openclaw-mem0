@@ -1,6 +1,6 @@
 {
   "name": "@mem0/openclaw-mem0",
-  "version": "0.3.10",
+  "version": "0.4.0",
   "type": "module",
   "description": "Mem0 memory backend for OpenClaw — platform or self-hosted open-source",
   "license": "Apache-2.0",
@@ -24,16 +24,22 @@
     "url": "https://github.com/1960697431/openclaw-mem0/issues"
   },
   "homepage": "https://github.com/1960697431/openclaw-mem0#readme",
-  "main": "index.ts",
+  "main": "src/index.ts",
   "files": [
-    "index.ts",
+    "src",
     "package.json",
     "README.md",
-    "openclaw.plugin.json"
+    "openclaw.plugin.json",
+    "tsconfig.json"
   ],
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./src/index.ts"
     ]
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
   }
 }

@@ -1,0 +1,312 @@
+
+import { type OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { type Mem0Config, type Mem0Provider, type AddOptions, type AddResult, type SearchOptions, type MemoryItem, type ListOptions } from "./types.js";
+import { TransformersJsEmbedder } from "./embedder.js";
+import { JsonCleaningLLM } from "./utils.js";
+
+// ============================================================================
+// Platform Provider
+// ============================================================================
+export class PlatformProvider implements Mem0Provider {
+  private client: any;
+  private initPromise: Promise<void> | null = null;
+
+  constructor(
+    private readonly apiKey: string,
+    private readonly orgId?: string,
+    private readonly projectId?: string,
+  ) { }
+
+  private async ensureClient(): Promise<void> {
+    if (this.client) return;
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this._init().catch((err) => {
+      this.initPromise = null;
+      throw err;
+    });
+    return this.initPromise;
+  }
+
+  private async _init(): Promise<void> {
+    const module = await import("mem0ai");
+    const MemoryClient = (module.default || module.MemoryClient) as any;
+    
+    const opts: Record<string, string> = { apiKey: this.apiKey };
+    if (this.orgId) opts.org_id = this.orgId;
+    if (this.projectId) opts.project_id = this.projectId;
+    this.client = new MemoryClient(opts);
+  }
+
+  async add(messages: Array<{ role: string; content: string }>, options: AddOptions): Promise<AddResult> {
+    await this.ensureClient();
+    const opts: Record<string, unknown> = { user_id: options.user_id };
+    if (options.run_id) opts.run_id = options.run_id;
+    if (options.custom_instructions) opts.custom_instructions = options.custom_instructions;
+    if (options.custom_categories) opts.custom_categories = options.custom_categories;
+    if (options.enable_graph) opts.enable_graph = options.enable_graph;
+    if (options.output_format) opts.output_format = options.output_format;
+
+    const result = await this.client.add(messages, opts);
+    return this.normalizeAddResult(result);
+  }
+
+  async search(query: string, options: SearchOptions): Promise<MemoryItem[]> {
+    await this.ensureClient();
+    const opts: Record<string, unknown> = { user_id: options.user_id };
+    if (options.run_id) opts.run_id = options.run_id;
+    if (options.top_k != null) opts.top_k = options.top_k;
+    if (options.threshold != null) opts.threshold = options.threshold;
+    
+    const results = await this.client.search(query, opts);
+    return this.normalizeSearchResults(results);
+  }
+
+  async get(memoryId: string): Promise<MemoryItem> {
+    await this.ensureClient();
+    const result = await this.client.get(memoryId);
+    return this.normalizeMemoryItem(result);
+  }
+
+  async getAll(options: ListOptions): Promise<MemoryItem[]> {
+    await this.ensureClient();
+    const opts: Record<string, unknown> = { user_id: options.user_id };
+    if (options.run_id) opts.run_id = options.run_id;
+    if (options.page_size != null) opts.page_size = options.page_size;
+
+    const results = await this.client.getAll(opts);
+    if (Array.isArray(results)) return results.map(this.normalizeMemoryItem);
+    if (results?.results && Array.isArray(results.results)) return results.results.map(this.normalizeMemoryItem);
+    return [];
+  }
+
+  async delete(memoryId: string): Promise<void> {
+    await this.ensureClient();
+    await this.client.delete(memoryId);
+  }
+
+  private normalizeMemoryItem(raw: any): MemoryItem {
+    return {
+      id: raw.id ?? raw.memory_id ?? "",
+      memory: raw.memory ?? raw.text ?? raw.content ?? "",
+      user_id: raw.user_id ?? raw.userId,
+      score: raw.score,
+      categories: raw.categories,
+      metadata: raw.metadata,
+      created_at: raw.created_at ?? raw.createdAt,
+      updated_at: raw.updated_at ?? raw.updatedAt,
+    };
+  }
+
+  private normalizeSearchResults(raw: any): MemoryItem[] {
+    if (Array.isArray(raw)) return raw.map(this.normalizeMemoryItem);
+    if (raw?.results && Array.isArray(raw.results)) return raw.results.map(this.normalizeMemoryItem);
+    return [];
+  }
+
+  private normalizeAddResult(raw: any): AddResult {
+    if (raw?.results && Array.isArray(raw.results)) {
+      return {
+        results: raw.results.map((r: any) => ({
+          id: r.id ?? r.memory_id ?? "",
+          memory: r.memory ?? r.text ?? "",
+          event: r.event ?? r.metadata?.event ?? "ADD",
+        })),
+      };
+    }
+    if (Array.isArray(raw)) {
+      return {
+        results: raw.map((r: any) => ({
+          id: r.id ?? r.memory_id ?? "",
+          memory: r.memory ?? r.text ?? "",
+          event: r.event ?? r.metadata?.event ?? "ADD",
+        })),
+      };
+    }
+    return { results: [] };
+  }
+}
+
+// ============================================================================
+// OSS Provider
+// ============================================================================
+export class OSSProvider implements Mem0Provider {
+  private memory: any;
+  private initPromise: Promise<void> | null = null;
+
+  constructor(
+    private readonly ossConfig: Mem0Config["oss"],
+    private readonly customPrompt: string | undefined,
+    private readonly resolvePath: (p: string) => string,
+    private readonly logger: OpenClawPluginApi["logger"],
+  ) { }
+
+  private async ensureMemory(): Promise<void> {
+    if (this.memory) return;
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this._init().catch((err) => {
+      this.initPromise = null;
+      throw err;
+    });
+    return this.initPromise;
+  }
+
+  private async _init(): Promise<void> {
+    process.env.MEM0_TELEMETRY = "false";
+
+    const mem0Oss = await import("mem0ai/oss");
+    const { Memory, EmbedderFactory, LLMFactory } = mem0Oss;
+
+    // Patch Embedder
+    const originalEmbedderCreate = EmbedderFactory.create.bind(EmbedderFactory);
+    EmbedderFactory.create = (provider: string, config: any) => {
+      if (provider.toLowerCase() === "transformersjs") {
+        return new TransformersJsEmbedder(config);
+      }
+      return originalEmbedderCreate(provider, config);
+    };
+
+    // Patch LLM
+    const originalLLMCreate = LLMFactory.create.bind(LLMFactory);
+    const self = this;
+    LLMFactory.create = (provider: string, config: any) => {
+      self.logger?.info(`[mem0] LLM Init: ${provider} (${config?.model})`);
+      const llm = originalLLMCreate(provider, config);
+
+      // Fix OpenRouter headers
+      if (provider === "openai" && (llm as any).openai) {
+        const oa = (llm as any).openai;
+        oa.defaultHeaders = { 
+          ...(oa.defaultHeaders || {}),
+          "HTTP-Referer": "https://github.com/1960697431/openclaw-mem0",
+          "X-Title": "OpenClaw Mem0"
+        };
+      }
+      return new JsonCleaningLLM(llm, self.logger);
+    };
+
+    const config: Record<string, unknown> = { version: "v1.1" };
+    
+    // Auto-configure dims for Qwen3
+    const isTransformer = this.ossConfig?.embedder?.provider?.toLowerCase() === "transformersjs";
+    const embedderDims = this.ossConfig?.embedder?.config?.embeddingDims ?? (isTransformer ? 1024 : undefined);
+
+    if (this.ossConfig?.embedder) config.embedder = this.ossConfig.embedder;
+
+    // Vector Store config logic
+    if (this.ossConfig?.vectorStore) {
+      const vectorStore = JSON.parse(JSON.stringify(this.ossConfig.vectorStore));
+      if (vectorStore.config?.dbPath) {
+        vectorStore.config.dbPath = this.resolvePath(vectorStore.config.dbPath);
+      }
+      if (!vectorStore.config?.dimension && embedderDims) {
+        vectorStore.config = vectorStore.config || {};
+        vectorStore.config.dimension = embedderDims;
+      }
+      config.vectorStore = vectorStore;
+    } else if (embedderDims) {
+      config.vectorStore = {
+        provider: "memory",
+        config: { dimension: embedderDims },
+      };
+    }
+
+    if (this.ossConfig?.llm) config.llm = this.ossConfig.llm;
+
+    if (this.ossConfig?.historyDbPath) {
+      config.historyDbPath = this.resolvePath(this.ossConfig.historyDbPath);
+    }
+
+    if (this.customPrompt) config.customPrompt = this.customPrompt;
+
+    this.memory = new Memory(config);
+  }
+
+  // Adapter methods mapping unified interface to OSS SDK (camelCase)
+  async add(messages: Array<{ role: string; content: string }>, options: AddOptions): Promise<AddResult> {
+    await this.ensureMemory();
+    const opts: any = { userId: options.user_id };
+    if (options.run_id) opts.runId = options.run_id;
+    const result = await this.memory.add(messages, opts);
+    return this.normalizeAddResult(result);
+  }
+
+  async search(query: string, options: SearchOptions): Promise<MemoryItem[]> {
+    await this.ensureMemory();
+    const opts: any = { userId: options.user_id };
+    if (options.run_id) opts.runId = options.run_id;
+    if (options.limit != null) opts.limit = options.limit;
+    else if (options.top_k != null) opts.limit = options.top_k;
+    
+    const results = await this.memory.search(query, opts);
+    return this.normalizeSearchResults(results);
+  }
+
+  async get(memoryId: string): Promise<MemoryItem> {
+    await this.ensureMemory();
+    const result = await this.memory.get(memoryId);
+    return this.normalizeMemoryItem(result);
+  }
+
+  async getAll(options: ListOptions): Promise<MemoryItem[]> {
+    await this.ensureMemory();
+    const opts: any = { userId: options.user_id };
+    if (options.run_id) opts.runId = options.run_id;
+    const results = await this.memory.getAll(opts);
+    
+    // Handle SDK quirks where it might return array or object
+    if (Array.isArray(results)) return results.map(this.normalizeMemoryItem);
+    if (results?.results && Array.isArray(results.results)) return results.results.map(this.normalizeMemoryItem);
+    return [];
+  }
+
+  async delete(memoryId: string): Promise<void> {
+    await this.ensureMemory();
+    await this.memory.delete(memoryId);
+  }
+
+  // Normalization Helpers (Duplicate logic but keeps classes decoupled)
+  private normalizeMemoryItem(raw: any): MemoryItem {
+    return {
+      id: raw.id ?? raw.memory_id ?? "",
+      memory: raw.memory ?? raw.text ?? raw.content ?? "",
+      user_id: raw.user_id ?? raw.userId,
+      score: raw.score,
+      categories: raw.categories,
+      metadata: raw.metadata,
+      created_at: raw.created_at ?? raw.createdAt,
+      updated_at: raw.updated_at ?? raw.updatedAt,
+    };
+  }
+
+  private normalizeSearchResults(raw: any): MemoryItem[] {
+    if (Array.isArray(raw)) return raw.map(this.normalizeMemoryItem);
+    if (raw?.results && Array.isArray(raw.results)) return raw.results.map(this.normalizeMemoryItem);
+    return [];
+  }
+
+  private normalizeAddResult(raw: any): AddResult {
+    // OSS SDK usually returns { results: [...] }
+    if (raw?.results && Array.isArray(raw.results)) {
+      return {
+        results: raw.results.map((r: any) => ({
+          id: r.id ?? r.memory_id ?? "",
+          memory: r.memory ?? r.text ?? "",
+          event: r.event ?? r.metadata?.event ?? "ADD",
+        })),
+      };
+    }
+    return { results: [] };
+  }
+}
+
+export function createProvider(cfg: Mem0Config, api: OpenClawPluginApi): Mem0Provider {
+  if (cfg.mode === "open-source") {
+    return new OSSProvider(
+      cfg.oss,
+      cfg.customPrompt,
+      (p) => api.resolvePath(p),
+      api.logger,
+    );
+  }
+  return new PlatformProvider(cfg.apiKey!, cfg.orgId, cfg.projectId);
+}
