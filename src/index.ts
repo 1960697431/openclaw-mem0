@@ -9,6 +9,7 @@ import { ReflectionEngine } from "./reflection.js";
 import { checkForUpdates } from "./updater.js";
 import { ArchiveManager } from "./archive.js";
 import { buildMemoryContext, estimateTokens, type SmartInjectionConfig } from "./contextManager.js";
+import { MemoryIngestor } from "./ingestor.js";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -567,8 +568,11 @@ const memoryPlugin = {
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
     const pluginDir = path.dirname(path.dirname(new URL(import.meta.url).pathname));
+    const workspaceDir = path.join(home, ".openclaw", "workspace");
+    
     const reflectionEngine = new ReflectionEngine(cfg.oss?.llm, api.logger, dataDir);
     const archiveManager = new ArchiveManager(dataDir, api.logger);
+    const memoryIngestor = new MemoryIngestor(workspaceDir, provider, api.logger, cfg.userId);
 
     if (cfg.autoRecall) {
       api.on("before_agent_start", async (event, ctx) => {
@@ -679,6 +683,9 @@ const memoryPlugin = {
     api.registerService({
       id: "openclaw-mem0",
       start: () => {
+        // Start memory file watcher
+        memoryIngestor.start();
+
         // Auto-update check on startup
         checkForUpdates(api, pluginDir);
 
@@ -699,6 +706,7 @@ const memoryPlugin = {
         }, 60000);
       },
       stop: () => {
+        memoryIngestor.stop();
         clearInterval(heartbeat);
         // Final status update on shutdown
         updateStatusFile().catch(() => {});
