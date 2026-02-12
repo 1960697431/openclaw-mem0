@@ -26,7 +26,8 @@ const SRC_FILES = [
   "src/embedder.ts",
   "src/reflection.ts",
   "src/providers.ts",
-  "src/updater.ts"
+  "src/updater.ts",
+  "src/archive.ts"
 ];
 
 const GITHUB_BASE = "https://raw.githubusercontent.com/1960697431/openclaw-mem0/main";
