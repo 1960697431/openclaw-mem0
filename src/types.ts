@@ -28,6 +28,7 @@ export type Mem0Config = {
   proactiveChannel?: string;
   proactiveTarget?: string;
   gatewayPort?: number;
+  maxMemoryCount?: number;
 };
 
 export interface MemoryItem {
@@ -93,4 +94,5 @@ export interface Mem0Provider {
   get(memoryId: string): Promise<MemoryItem>;
   getAll(options: ListOptions): Promise<MemoryItem[]>;
   delete(memoryId: string): Promise<void>;
+  prune(userId: string, maxCount: number): Promise<number>;
 }

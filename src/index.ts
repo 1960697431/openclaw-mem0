@@ -16,7 +16,8 @@ import * as fs from "node:fs";
 const ALLOWED_KEYS = [
   "mode", "apiKey", "userId", "orgId", "projectId", "autoCapture", "autoRecall",
   "customInstructions", "customCategories", "customPrompt", "enableGraph",
-  "searchThreshold", "topK", "oss", "proactiveChannel", "proactiveTarget", "gatewayPort"
+  "searchThreshold", "topK", "oss", "proactiveChannel", "proactiveTarget", "gatewayPort",
+  "maxMemoryCount"
 ];
 
 function parseConfig(value: unknown): Mem0Config {
@@ -60,6 +61,7 @@ function parseConfig(value: unknown): Mem0Config {
     proactiveChannel: typeof cfg.proactiveChannel === "string" ? cfg.proactiveChannel : undefined,
     proactiveTarget: typeof cfg.proactiveTarget === "string" ? cfg.proactiveTarget : undefined,
     gatewayPort: typeof cfg.gatewayPort === "number" ? cfg.gatewayPort : undefined,
+    maxMemoryCount: typeof cfg.maxMemoryCount === "number" ? cfg.maxMemoryCount : 2000,
   };
 }
 
@@ -346,6 +348,13 @@ const memoryPlugin = {
       start: () => {
         // Auto-update check on startup
         checkForUpdates(api, pluginDir);
+
+        // Prune old memories if needed
+        provider.prune(cfg.userId, cfg.maxMemoryCount || 2000)
+          .then((deleted) => {
+            if (deleted > 0) api.logger.info(`[mem0] Pruned ${deleted} old memories (limit: ${cfg.maxMemoryCount})`);
+          })
+          .catch((err) => api.logger.warn(`[mem0] Prune failed: ${err}`));
 
         heartbeat = setInterval(() => {
           // Just check/fire to update state. 

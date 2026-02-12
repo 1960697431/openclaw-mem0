@@ -231,6 +231,7 @@ mem0 需要一个 LLM 来提取对话中的事实。以下是所有支持的配�
 | `topK` | number | `5` | 每次召回的最大记忆条数 |
 | `searchThreshold` | number | `0.5` | 语义匹配阈值 (0-1) |
 | `gatewayPort` | number | `3000` | Gateway 端口（非默认端口时需设置） |
+| `maxMemoryCount` | number | `2000` | 最大记忆条数，超过自动删除最旧记忆（v0.4.1+） |
 | `proactiveChannel` | string | 自动检测 | 主动消息渠道 (`telegram`/`feishu`/`imessage`) |
 | `proactiveTarget` | string | 自动检测 | 目标 ID (chat_id / 手机号) |
 
@@ -267,6 +268,9 @@ openclaw mem0 list                       # 列出所有
 ---
 
 ## 🔄 版本历史
+
+### v0.4.1 (数据库优化)
+- **记忆修剪 (Pruning)**：新增 `maxMemoryCount` 配置（默认 2000），启动时自动清理老旧记忆，防止数据库无限膨胀导致 CPU 飙升。
 
 ### v0.4.0 (重大更新)
 - **架构重构**：完全模块化设计 (`src/`), 提升稳定性和可维护性。

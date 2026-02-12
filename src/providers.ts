@@ -84,6 +84,25 @@ export class PlatformProvider implements Mem0Provider {
     await this.client.delete(memoryId);
   }
 
+  async prune(userId: string, maxCount: number): Promise<number> {
+    await this.ensureClient();
+    const memories = await this.getAll({ user_id: userId });
+    if (memories.length <= maxCount) return 0;
+
+    memories.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+    const toDelete = memories.slice(0, memories.length - maxCount);
+
+    let deleted = 0;
+    // Sequential delete to be safe
+    for (const mem of toDelete) {
+      try {
+        await this.delete(mem.id);
+        deleted++;
+      } catch { /* ignore */ }
+    }
+    return deleted;
+  }
+
   private normalizeMemoryItem(raw: any): MemoryItem {
     return {
       id: raw.id ?? raw.memory_id ?? "",
@@ -262,6 +281,24 @@ export class OSSProvider implements Mem0Provider {
   async delete(memoryId: string): Promise<void> {
     await this.ensureMemory();
     await this.memory.delete(memoryId);
+  }
+
+  async prune(userId: string, maxCount: number): Promise<number> {
+    await this.ensureMemory();
+    const memories = await this.getAll({ user_id: userId });
+    if (memories.length <= maxCount) return 0;
+
+    memories.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+    const toDelete = memories.slice(0, memories.length - maxCount);
+
+    let deleted = 0;
+    for (const mem of toDelete) {
+      try {
+        await this.delete(mem.id);
+        deleted++;
+      } catch { /* ignore */ }
+    }
+    return deleted;
   }
 
   // Normalization Helpers (Duplicate logic but keeps classes decoupled)
