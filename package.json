@@ -24,7 +24,7 @@
     "url": "https://github.com/1960697431/openclaw-mem0/issues"
   },
   "homepage": "https://github.com/1960697431/openclaw-mem0#readme",
-  "main": "src/index.ts",
+  "main": "index.ts",
   "files": [
     "src",
     "package.json",
