@@ -11,36 +11,21 @@
 
 ## ⚡ 极速安装 (v0.4.5+)
 
-### 1. 一键安装
-复制下方命令到终端运行：
+**只需运行这一行命令，剩下的全自动完成：**
+
 ```bash
 curl -sL https://raw.githubusercontent.com/1960697431/openclaw-mem0/main/install.sh | bash
 ```
 
-### 2. 启用插件 (零配置模式 ✨)
-修改 `~/.openclaw/openclaw.json`，只需**启用**即可：
+脚本会自动：
+1. 下载并安装插件
+2. **自动修改** `openclaw.json` 启用插件（零配置模式）
+3. 自动继承你的主 LLM 配置
 
-```json
-{
-  "plugins": {
-    "enabled": true,
-    "entries": {
-      "openclaw-mem0": {
-        "enabled": true
-      }
-    }
-  }
-}
-```
-
-> **🎉 它是怎么工作的？**
-> 插件会自动读取 OpenClaw 的主 LLM 配置。如果你已经在 OpenClaw 里配好了 DeepSeek 或 Ollama，插件会直接“继承”过来用，无需重复配置！
-
-### 3. 重启 Gateway
+**安装完成后，直接重启 Gateway 即可：**
 ```bash
 openclaw gateway restart
 ```
-*首次启动会自动下载嵌入模型（约 417MB，国内加速），请耐心等待几分钟。*
 
 ---
 
