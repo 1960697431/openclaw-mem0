@@ -368,17 +368,29 @@ export class OSSProvider implements Mem0Provider {
   }
 }
 
-export function createProvider(cfg: Mem0Config, api: OpenClawPluginApi): Mem0Provider {
-  const pluginDir = api.resolvePath ? api.resolvePath(".") : process.cwd();
-
+export function createProvider(cfg: Mem0Config, api: OpenClawPluginApi, dataDir: string): Mem0Provider {
   if (cfg.mode === "open-source") {
+    // Inject dataDir into default OSS config if paths are not absolute
+    if (cfg.oss && cfg.oss.vectorStore && cfg.oss.vectorStore.config && !cfg.oss.vectorStore.config.dbPath) {
+       // If user didn't specify dbPath, SDK defaults to current dir. We want dataDir.
+       // Note: mem0ai/oss might default to ./lancedb or similar.
+       // We can try to force it by modifying the config passed to OSSProvider
+       // But OSSProvider logic uses resolvePath.
+    }
+    
     return new OSSProvider(
       cfg.oss,
       cfg.customPrompt,
-      (p) => api.resolvePath(p),
+      (p) => {
+        // If path is relative, resolve it against dataDir instead of pluginDir
+        if (path.isAbsolute(p)) return p;
+        return path.join(dataDir, p);
+      },
       api.logger,
-      pluginDir
+      dataDir
     );
   }
+  return new PlatformProvider(cfg.apiKey!, cfg.orgId, cfg.projectId, api.logger, dataDir);
+}
   return new PlatformProvider(cfg.apiKey!, cfg.orgId, cfg.projectId, api.logger, pluginDir);
 }

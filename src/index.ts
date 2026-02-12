@@ -176,7 +176,15 @@ const memoryPlugin = {
 
   register(api: OpenClawPluginApi) {
     const cfg = parseConfig(api.pluginConfig);
-    const provider = createProvider(cfg, api);
+    
+    // Ensure Data Directory (~/.openclaw/data/mem0)
+    const home = os.homedir();
+    const dataDir = path.join(home, ".openclaw", "data", "mem0");
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+
+    const provider = createProvider(cfg, api, dataDir);
     let currentSessionId: string | undefined;
 
     api.logger.info(`openclaw-mem0: registered (mode=${cfg.mode}, user=${cfg.userId})`);
@@ -398,6 +406,27 @@ const memoryPlugin = {
         } catch(e) { console.error(e); }
       });
 
+      mem0.command("import-legacy").action(async () => {
+        const memoryMdPath = path.join(home, ".openclaw", "memory.md");
+        if (!fs.existsSync(memoryMdPath)) {
+          console.log("No legacy memory.md found.");
+          return;
+        }
+        console.log(`Found legacy memory at ${memoryMdPath}. Importing...`);
+        const content = fs.readFileSync(memoryMdPath, "utf-8");
+        // Split by newlines or paragraphs
+        const lines = content.split("\n").filter(l => l.trim().length > 5);
+        if (lines.length === 0) return;
+
+        console.log(`Found ${lines.length} items. Processing...`);
+        // Batch add
+        for (const line of lines) {
+           await provider.add([{ role: "user", content: line }], buildAddOptions());
+           process.stdout.write(".");
+        }
+        console.log("\n✅ Import complete. You can now disable the default memory.");
+      });
+
       mem0.command("stats").action(async () => {
         console.log({ mode: cfg.mode, user: cfg.userId, autoRecall: cfg.autoRecall });
       });
@@ -405,10 +434,9 @@ const memoryPlugin = {
 
     // ── Lifecycle ───────────────────────────────────────────────────────────
     const pluginDir = path.dirname(path.dirname(new URL(import.meta.url).pathname));
-    const reflectionEngine = new ReflectionEngine(cfg.oss?.llm, api.logger, pluginDir);
-    const archiveManager = new ArchiveManager(pluginDir, api.logger);
+    const reflectionEngine = new ReflectionEngine(cfg.oss?.llm, api.logger, dataDir);
+    const archiveManager = new ArchiveManager(dataDir, api.logger);
 
-    if (cfg.autoRecall) {
       api.on("before_agent_start", async (event, ctx) => {
         if (!event.prompt || event.prompt.length < 5) return;
         const sessionId = (ctx as any)?.sessionKey;
