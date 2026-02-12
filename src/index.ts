@@ -585,19 +585,19 @@ const memoryPlugin = {
           const injection = buildMemoryContext(memories, injectionConfig);
           
           if (injection.truncated) {
-            api.logger.debug?.(`[mem0] Context truncated: ${injection.injectedCount}/${injection.totalMemories} memories, ~${injection.estimatedTokens} tokens`);
+            api.logger.debug?.(`[mem0] 上下文已截断: ${injection.injectedCount}/${injection.totalMemories} 条记忆, 约 ${injection.estimatedTokens} tokens`);
           }
           
           let context = injection.context;
           
           if (action) {
-            context += `\n<proactive-insight>\nSYSTEM NOTICE: ${action.message}\n</proactive-insight>`;
-            api.logger.info(`[mem0] Injected proactive action: ${action.message}`);
+            context += `\n<proactive-insight>\n系统提示: ${action.message}\n</proactive-insight>`;
+            api.logger.info(`[mem0] 已注入主动提醒: ${action.message}`);
           }
           
           if (context) return { systemContext: context };
         } catch (err) {
-          api.logger.warn(`[mem0] Auto-recall failed: ${err}`);
+          api.logger.warn(`[mem0] 自动回忆失败: ${err}`);
         }
       });
     }
@@ -614,16 +614,20 @@ const memoryPlugin = {
 
         if (!validMsgs.length) return;
 
-        try {
-          const res = await provider.add(validMsgs as any, buildAddOptions(undefined, currentSessionId));
-          if (res.results.length > 0) {
-            api.logger.info(`[mem0] Captured ${res.results.length} memories`);
-            const memories = await provider.search(validMsgs.map((m: any) => m.content).join(" "), buildSearchOptions());
-            reflectionEngine.reflect(validMsgs as any, memories);
+        // ⚡️ Async Fire-and-Forget: Don't block the gateway response
+        // 异步后台执行：不阻塞 Gateway 响应
+        (async () => {
+          try {
+            const res = await provider.add(validMsgs as any, buildAddOptions(undefined, currentSessionId));
+            if (res.results.length > 0) {
+              api.logger.info(`[mem0] ✨ 已捕获 ${res.results.length} 条新记忆 (后台处理中)`);
+              const memories = await provider.search(validMsgs.map((m: any) => m.content).join(" "), buildSearchOptions());
+              reflectionEngine.reflect(validMsgs as any, memories);
+            }
+          } catch (err) {
+            api.logger.warn(`[mem0] 记忆捕获失败: ${err}`);
           }
-        } catch (err) {
-          api.logger.warn(`[mem0] Capture failed: ${err}`);
-        }
+        })();
       });
     }
 
@@ -644,7 +648,7 @@ const memoryPlugin = {
             autoRecall: cfg.autoRecall,
             maxMemoryCount: cfg.maxMemoryCount,
           },
-          version: "0.5.0",
+          version: "0.5.2",
         };
         
         fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
@@ -662,9 +666,9 @@ const memoryPlugin = {
         // Prune old memories if needed
         provider.prune(cfg.userId, cfg.maxMemoryCount || 2000)
           .then((deleted) => {
-            if (deleted > 0) api.logger.info(`[mem0] Pruned ${deleted} old memories (limit: ${cfg.maxMemoryCount})`);
+            if (deleted > 0) api.logger.info(`[mem0] 🧹 已清理 ${deleted} 条旧记忆 (限制: ${cfg.maxMemoryCount})`);
           })
-          .catch((err) => api.logger.warn(`[mem0] Prune failed: ${err}`));
+          .catch((err) => api.logger.warn(`[mem0] 清理失败: ${err}`));
 
         // Initial status update
         updateStatusFile();

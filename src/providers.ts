@@ -295,15 +295,6 @@ export class OSSProvider implements Mem0Provider {
       self.logger?.info(`[mem0] LLM Init: ${provider} (${config?.model})`);
       const llm = originalLLMCreate(provider, config);
 
-      // Fix OpenRouter headers
-      if (provider === "openai" && (llm as any).openai) {
-        const oa = (llm as any).openai;
-        oa.defaultHeaders = { 
-          ...(oa.defaultHeaders || {}),
-          "HTTP-Referer": "https://github.com/1960697431/openclaw-mem0",
-          "X-Title": "OpenClaw Mem0"
-        };
-      }
       // Pass both llm and config to JsonCleaningLLM for provider detection
       return new JsonCleaningLLM(llm, self.logger, config);
     };
