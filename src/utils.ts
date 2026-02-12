@@ -119,17 +119,48 @@ export function cleanJsonResponse(content: string): string {
 }
 
 /**
- * Wraps an LLM instance to strip markdown code blocks from JSON responses.
+ * Wraps an LLM instance to:
+ * 1. Strip markdown code blocks from JSON responses
+ * 2. Handle providers that don't support response_format (MiniMax, etc.)
  */
 export class JsonCleaningLLM {
-  constructor(private wrappedLLM: any, private logger?: OpenClawPluginApi["logger"]) { }
+  private static JSON_PROMPT = `\n\nIMPORTANT: You must respond with valid JSON only. No markdown, no explanations, just the JSON object.`;
+  
+  constructor(
+    private wrappedLLM: any, 
+    private logger?: OpenClawPluginApi["logger"],
+    private config?: Record<string, unknown>
+  ) { }
 
   async generateResponse(
     messages: Array<{ role: string; content: string }>,
     responseFormat?: any,
     tools?: any
   ): Promise<string | { content: string; role: string; toolCalls?: any[] }> {
-    const response = await this.wrappedLLM.generateResponse(messages, responseFormat, tools);
+    // Handle providers that don't support response_format
+    let modifiedMessages = messages;
+    let modifiedFormat = responseFormat;
+    
+    if (responseFormat?.type === 'json_object') {
+      const providerInfo = this.detectProvider();
+      
+      if (providerInfo.needsJsonWorkaround) {
+        this.logger?.debug?.(`[mem0] Provider '${providerInfo.name}' doesn't support json_object mode, using prompt-based JSON enforcement`);
+        
+        // Remove the unsupported response_format
+        modifiedFormat = undefined;
+        
+        // Add JSON enforcement to the last user message
+        modifiedMessages = messages.map((msg, idx) => {
+          if (idx === messages.length - 1 && msg.role === 'user') {
+            return { ...msg, content: msg.content + JsonCleaningLLM.JSON_PROMPT };
+          }
+          return msg;
+        });
+      }
+    }
+
+    const response = await this.wrappedLLM.generateResponse(modifiedMessages, modifiedFormat, tools);
 
     if (typeof response === "string") {
       return cleanJsonResponse(response);
@@ -158,5 +189,57 @@ export class JsonCleaningLLM {
     }
 
     return response;
+  }
+
+  /**
+   * Detect the LLM provider and whether it needs JSON mode workaround
+   */
+  private detectProvider(): { name: string; needsJsonWorkaround: boolean } {
+    const baseURL = (this.config?.baseURL || this.config?.baseUrl || '') as string;
+    const model = (this.config?.model || '') as string;
+    
+    // Providers known to NOT support response_format: json_object
+    const noJsonModeProviders = [
+      { pattern: 'minimax', name: 'MiniMax' },
+      { pattern: 'api.minimax', name: 'MiniMax' },
+      { pattern: 'abab', name: 'MiniMax' },
+      { pattern: 'minimaxi', name: 'MiniMax' },
+    ];
+    
+    // Providers that DO support json_object (no workaround needed)
+    const supportsJsonMode = [
+      'openai.com',
+      'api.openai.com',
+      'api.deepseek.com',
+      'api.moonshot.cn',
+      'claude',
+      'anthropic',
+      'api.anthropic',
+    ];
+
+    const urlLower = baseURL.toLowerCase();
+    const modelLower = model.toLowerCase();
+
+    // Check if it's a known no-json-mode provider
+    for (const provider of noJsonModeProviders) {
+      if (urlLower.includes(provider.pattern) || modelLower.includes(provider.pattern)) {
+        return { name: provider.name, needsJsonWorkaround: true };
+      }
+    }
+
+    // Check if it's a known json-mode supporter
+    for (const provider of supportsJsonMode) {
+      if (urlLower.includes(provider)) {
+        return { name: provider, needsJsonWorkaround: false };
+      }
+    }
+
+    // Default for non-OpenAI URLs: assume no json_object support
+    // This is safer for Chinese/local LLMs
+    if (urlLower && !urlLower.includes('openai.com')) {
+      return { name: baseURL.split('//')[1]?.split('/')[0] || 'unknown', needsJsonWorkaround: true };
+    }
+
+    return { name: 'unknown', needsJsonWorkaround: false };
   }
 }

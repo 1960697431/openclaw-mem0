@@ -304,7 +304,8 @@ export class OSSProvider implements Mem0Provider {
           "X-Title": "OpenClaw Mem0"
         };
       }
-      return new JsonCleaningLLM(llm, self.logger);
+      // Pass both llm and config to JsonCleaningLLM for provider detection
+      return new JsonCleaningLLM(llm, self.logger, config);
     };
 
     const config: Record<string, unknown> = { version: "v1.1" };

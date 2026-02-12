@@ -644,7 +644,7 @@ const memoryPlugin = {
             autoRecall: cfg.autoRecall,
             maxMemoryCount: cfg.maxMemoryCount,
           },
-          version: "0.4.9",
+          version: "0.5.0",
         };
         
         fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
