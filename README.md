@@ -5,7 +5,7 @@
 基于 Mem0 构建的下一代智能记忆系统，专为 OpenClaw 设计。
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.4.8-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.4.9-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/OpenClaw-2026.2+-green.svg" alt="OpenClaw" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-orange.svg" alt="License" />
 </p>
@@ -159,6 +159,11 @@ cat ~/.openclaw/data/mem0/mem0-status.json
 ---
 
 ## 🔄 版本历史
+
+### v0.4.9 (零配置增强)
+- 🐛 修复 `{ "enabled": true }` 最小配置启动失败的问题
+- 🆕 支持 OpenClaw 新版 `models.providers` 配置格式
+- 🐛 修复 README 表格对齐问题
 
 ### v0.4.8 (智能优化)
 - 🆕 **Smart Context Injection**: Token 预算管理，自动适配模型上下文
