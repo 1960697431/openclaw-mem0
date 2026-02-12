@@ -13,7 +13,7 @@ import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
 
-// Helper to load main OpenClaw config
+// Helper to load main OpenClaw config and extract default LLM settings
 function loadMainConfig(): Record<string, any> | null {
   try {
     const home = os.homedir();
@@ -25,6 +25,54 @@ function loadMainConfig(): Record<string, any> | null {
   } catch (e) {
     // Ignore errors, fallback to manual config
   }
+  return null;
+}
+
+// Extract default LLM config from OpenClaw main config
+function extractDefaultLlmConfig(mainConfig: Record<string, any>): { provider: string; config: Record<string, any> } | null {
+  // Try models.providers first (newer structure)
+  if (mainConfig.models?.providers) {
+    const providers = mainConfig.models.providers;
+    // Prefer certain providers in order
+    const preferredOrder = ['zhipu', 'deepseek', 'moonshot', 'openai', 'anthropic'];
+    
+    for (const preferred of preferredOrder) {
+      if (providers[preferred]) {
+        const p = providers[preferred];
+        return {
+          provider: p.api === 'anthropic-messages' ? 'anthropic' : 'openai',
+          config: {
+            apiKey: p.apiKey,
+            baseURL: p.baseUrl,
+            model: p.models?.[0]?.id || 'default',
+          }
+        };
+      }
+    }
+    
+    // Fallback to first available provider
+    const firstProvider = Object.entries(providers)[0];
+    if (firstProvider) {
+      const [name, p] = firstProvider as [string, any];
+      return {
+        provider: p.api === 'anthropic-messages' ? 'anthropic' : 'openai',
+        config: {
+          apiKey: p.apiKey,
+          baseURL: p.baseUrl,
+          model: p.models?.[0]?.id || 'default',
+        }
+      };
+    }
+  }
+  
+  // Try legacy llm structure
+  if (mainConfig.llm) {
+    const mainLlm = mainConfig.llm;
+    const provider = mainLlm.provider || mainLlm.type || "openai";
+    const config = mainLlm.config || mainLlm;
+    return { provider, config };
+  }
+  
   return null;
 }
 
@@ -41,8 +89,10 @@ const ALLOWED_KEYS = [
 ];
 
 function parseConfig(value: unknown): Mem0Config {
+  // Handle empty/undefined config - use defaults
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("openclaw-mem0 config required");
+    console.log("[mem0] No config provided, using zero-config mode with inherited LLM settings");
+    value = {};
   }
   const cfg = value as Record<string, unknown>;
   
@@ -95,28 +145,19 @@ function parseConfig(value: unknown): Mem0Config {
     // Scenario B: No config provided -> Inherit from Main Config
     else if (!ossConfig.llm) {
       const mainConfig = loadMainConfig();
-      if (mainConfig && mainConfig.llm) {
-        console.log("[mem0] 🔗 No plugin config found. Inheriting LLM config from OpenClaw main config.");
-        // We need to adapt OpenClaw's main LLM config format to Mem0's format
-        // Usually OpenClaw main config looks like: { llm: { provider: "openai", config: { ... } } }
-        // Or sometimes: { llm: { type: "openai", ... } }
-        // We assume it matches roughly or we map it.
-        const mainLlm = mainConfig.llm;
-        
-        // Map "type" to "provider" if needed
-        const provider = mainLlm.provider || mainLlm.type || "openai";
-        const config = mainLlm.config || mainLlm; // Fallback if it's flat
-
-        // Special handling: remove internal keys if any
-        const cleanConfig = { ...config };
-        
-        ossConfig.llm = {
-          provider,
-          config: cleanConfig
-        };
-      } else {
-        // Fallback warning handled downstream or it will fail gracefully
-        console.warn("[mem0] ⚠️ No LLM configured in plugin OR main config. Memory extraction will fail.");
+      if (mainConfig) {
+        const defaultLlm = extractDefaultLlmConfig(mainConfig);
+        if (defaultLlm) {
+          console.log("[mem0] 🔗 No plugin config found. Inheriting LLM config from OpenClaw main config.");
+          ossConfig.llm = defaultLlm;
+        } else {
+          console.warn("[mem0] ⚠️ Could not extract LLM config from main config. Using fallback.");
+        }
+      }
+      
+      // Final fallback - still no LLM
+      if (!ossConfig.llm) {
+        console.warn("[mem0] ⚠️ No LLM configured. Memory extraction may fail. Please configure provider in openclaw.json.");
       }
     }
   }
