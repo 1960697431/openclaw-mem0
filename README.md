@@ -1,6 +1,7 @@
-# OpenClaw 长期记忆插件 (mem0)
+# 🧠 OpenClaw 长期记忆插件 (Mem0)
 
-让你的 AI 助手拥有**真正的记忆力** — 语义搜索、自动提取、主动提醒。
+> **让你的 AI 助手拥有“大象般的记忆”与“猎豹般的速度”。**
+> 基于 Mem0 构建的下一代智能记忆系统，支持语义搜索、自动归档与主动提醒。
 
 <p align="center">
   <img src="assets/architecture.png" alt="架构图" width="700" />
@@ -8,10 +9,42 @@
 
 ---
 
+## 🌟 核心优势：为什么选择这个插件？
+
+大多数记忆插件面临一个两难困境：**存得越多，系统越慢/内存占用越高。**
+我们通过独创的 **“冷热分离架构 (Hot/Cold Dual-Tier Architecture)”** 完美解决了这个问题。
+
+### 1. 🔥 热库 + 🧊 冷库：永不遗忘，极速响应 (v0.4.3+)
+我们不把所有记忆都塞进昂贵的向量数据库（热库），而是智能分层：
+
+| 特性 | 🔥 **热库 (Hot Storage)** | 🧊 **冷库 (Cold Archive)** |
+| :--- | :--- | :--- |
+| **存储介质** | 本地向量数据库 (Vector DB) | 纯文本归档 (JSONL Archive) |
+| **内容** | 最近、最活跃的记忆 (默认 2000 条) | 所有的历史记忆 (无限容量) |
+| **速度** | **毫秒级** (语义搜索) | 秒级 (流式扫描) |
+| **内存占用** | 固定 (约 1.5GB) | **接近 0** (按需流式读取) |
+| **自动维护** | 超过上限自动“退休”到冷库 | 永久保存，永不丢失 |
+
+**✨ 你的收益**：无论你和 AI 聊了几年，存了多少亿条数据，OpenClaw 的**启动速度和内存占用永远像第一天一样轻快**。
+
+### 2. 🕵️ 深度检索 (Agentic Deep Search)
+如果热库里找不到？别担心。
+我们实现了 **“按需深度检索”** —— AI 像人类一样思考：
+1.  先翻“大脑”（热库）。
+2.  如果没找到，且你问的是陈年旧事（如“我去年那个项目...”）。
+3.  Agent 会**自主决定**开启 `deep: true` 模式，去翻阅“档案室”（冷库）。
+4.  **零浪费**：对于无关的新问题，绝不浪费 IO 资源去扫冷库。
+
+### 3. 🧠 主动大脑 (Active Brain)
+不仅仅是存储，它还会思考。
+- **持久化待办**：它会从对话中捕捉“明天提醒我...”的意图，并保存到磁盘。即使重启 Gateway，它依然记得提醒你。
+- **三级推送**：支持 Telegram/飞书/微信 等渠道的主动推送。
+
+---
+
 ## ⚡ 3 分钟快速安装
 
-### 第一步：下载插件
-
+### 1. 下载插件
 ```bash
 curl -L https://github.com/1960697431/openclaw-mem0/archive/refs/heads/main.zip -o mem0.zip \
   && unzip -o mem0.zip \
@@ -22,37 +55,29 @@ curl -L https://github.com/1960697431/openclaw-mem0/archive/refs/heads/main.zip 
   && npm install --production
 ```
 
-### 第二步：配置 `~/.openclaw/openclaw.json`
+### 2. 配置 `~/.openclaw/openclaw.json`
+只需在 `plugins` 中添加如下配置。
 
-在 `plugins` 部分添加：
+> 💡 **智能配置 (v0.4.0+)**：直接写 `provider: "deepseek"` 即可，插件会自动补全 URL，再也不用担心漏写 `/v1` 了！
 
 ```json
 {
   "plugins": {
     "enabled": true,
-    "slots": {
-      "memory": "openclaw-mem0"
-    },
     "entries": {
       "openclaw-mem0": {
         "enabled": true,
         "config": {
           "mode": "open-source",
           "userId": "default",
-          "autoRecall": true,
-          "autoCapture": true,
-          "topK": 5,
+          "maxMemoryCount": 2000,
           "oss": {
-            "embedder": {
-              "provider": "transformersjs",
-              "config": { "model": "onnx-community/Qwen3-Embedding-0.6B-ONNX" }
-            },
+            "embedder": { "provider": "transformersjs" },
             "llm": {
-              "provider": "openai",
+              "provider": "deepseek", 
               "config": {
-                "apiKey": "你的API密钥",
-                "model": "deepseek-chat",
-                "baseURL": "https://api.deepseek.com/v1"
+                "apiKey": "sk-xxxxxxxxxxxxxxxx",
+                "model": "deepseek-chat"
               }
             }
           }
@@ -63,232 +88,112 @@ curl -L https://github.com/1960697431/openclaw-mem0/archive/refs/heads/main.zip 
 }
 ```
 
-> 💡 **智能配置修正**：v0.4.0+ 版本支持智能修正。如果你忘记写 `/v1` 或者搞错了 URL，插件会自动帮你修正！
-
-### 第三步：重启 Gateway
-
+### 3. 启动
 ```bash
 openclaw gateway restart
 ```
-
-首次启动会自动从 GitHub Releases 下载嵌入模型（约 417MB 压缩包），之后即可离线使用。
-
-**✅ 安装完成！** 现在正常和 AI 对话即可，记忆会全自动运行。
+*首次启动会自动从 GitHub Releases 下载嵌入模型（国内加速，约 417MB），无需梯子。*
 
 ---
 
-## 📊 工作原理
+## 🧩 详细工作流
 
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant A as Agent
+    participant Hot as 🔥 热库 (VectorDB)
+    participant Cold as 🧊 冷库 (Archive)
+    participant Brain as 🧠 主动大脑
+
+    U->>A: "我以前那个项目叫什么来着？"
+    
+    rect rgb(240, 248, 255)
+    Note over A, Hot: 阶段一：极速回忆
+    A->>Hot: search("项目名称")
+    Hot-->>A: (无结果)
+    end
+
+    rect rgb(255, 240, 245)
+    Note over A, Cold: 阶段二：按需深挖
+    A->>A: 思考: "这是查旧账，热库没有，得去翻档案"
+    A->>Cold: search("项目名称", deep=true)
+    Cold-->>A: Found: "Project Titan" [ARCHIVE]
+    end
+
+    A->>U: "你指的是 'Project Titan' 吗？"
+
+    rect rgb(240, 255, 240)
+    Note over A, Brain: 阶段三：反思与归档
+    Brain->>Hot: 捕获新对话
+    Hot->>Cold: (后台) 这里的记忆太挤了，把最旧的移到冷库
+    end
 ```
-用户发消息: "帮我用 Next.js 写一个博客"
-  │
-  │  ┌──── Auto-Recall (对话前) ────────────┐
-  │  │                                       │
-  │  │  语义搜索向量数据库 → 返回 Top-5:     │
-  │  │  · "用户熟悉 React 和 TypeScript"     │
-  │  │  · "用户偏好 Tailwind CSS"            │
-  │  │  → 注入到 Agent 系统上下文            │
-  │  └───────────────────────────────────────┘
-  │
-  ▼
-Agent 基于记忆给出个性化回复
-  │
-  │  ┌──── Auto-Capture (对话后) ───────────┐
-  │  │                                       │
-  │  │  LLM 提取新知识:                      │
-  │  │  → "用户想用 Next.js 写博客"          │
-  │  │  → 自动去重 / 合并 / 存入向量数据库   │
-  │  │                                       │
-  │  │  反思引擎分析:                        │
-  │  │  → 发现隐含意图？→ 生成主动提醒       │
-  │  └───────────────────────────────────────┘
-```
-
-**核心概念：**
-- **嵌入模型 (Embedder)** = 图书管理员 — 负责搜索和召回，完全本地运行，零外部依赖
-- **LLM** = 智能秘书 — 负责从对话中提取重要事实，需要配置 API
-
-> 如果你发现"模型加载成功"但"No memories found"，通常是 **LLM 配置有误**（Key 或 URL 错误），导致无法提取事实。
 
 ---
 
-## 🤔 为什么用这个而不用官方记忆？
+## 🔧 LLM 配置指南
 
-| 特性 | OpenClaw 官方记忆 | 本插件 (mem0) |
-|------|-------------------|--------------|
-| **存储方式** | 文件 (memory.md) | 向量数据库 |
-| **召回方式** | 全量加载到上下文 | 语义搜索 Top-K |
-| **Token 消耗** | 随记忆增长膨胀 (2000+) | **固定 ~300 tokens** |
-| **存储效率** | 越写越厚 | 自动去重、合并 |
-| **100 条记忆时** | 全部加载 (10000+ tokens) | 依然只 Top-5 (~300 tokens) |
-| **相关性** | 全部记忆都加载 | 只召回语义相关的 |
-| **多用户** | 单用户 | 支持隔离 |
-| **主动提醒** | ❌ | ✅ Active Brain |
+支持所有主流模型。我们内置了针对国产模型的**最佳实践预设**：
 
-**简单来说：** 官方记忆像一本**笔记本**，越写越厚，每次都要翻完；mem0 像一个**智能秘书**，只告诉你当前需要知道的，而且记忆量增长**不会消耗更多 Token**。
-
----
-
-## 🧠 Active Brain（主动大脑）
-
-在 Auto-Capture 之后，**反思引擎**会静默分析对话，发现用户的隐含意图：
-
-- 🔔 "明天要开会" → 自动生成提醒
-- 📋 "帮我跟进这个问题" → 生成跟进任务
-- 💡 "我应该…" → 捕获行动意图
-
-**持久化存储** (v0.4.0+)：
-所有的待办事项和提醒都会保存到本地文件 (`mem0-actions.json`)，即使你重启了 OpenClaw，你的 AI 助手也不会忘记之前答应过你的事情。
-
-**三级投递策略**（确保你不会错过）：
-
-| 级别 | 方式 | 说明 |
-|------|------|------|
-| 🚀 第一级 | **直接发送** | 通过 Gateway API 推送到 Telegram / 飞书 / iMessage 等 |
-| ⏳ 第二级 | **下次注入** | 如果发送失败，在下次对话时自然提及 |
-| 📝 第三级 | **静默日志** | 极端情况下记录到控制台 |
-
-> 💡 渠道自动检测：只要你和 AI 聊过一次，插件就能记住在哪里找到你。无需手动配置。
-
----
-
-## 🔧 LLM 配置大全
-
-mem0 需要一个 LLM 来提取对话中的事实。以下是所有支持的配置方式：
-
-> ⚠️ **v0.4.0 更新**：插件现在会自动检测并修正 DeepSeek、Moonshot 等国产模型的 URL 配置错误，你再也不用担心漏写 `/v1` 了！
-
-### 配置速查表
-
-| 供应商 | provider | 模型示例 | 特别说明 |
-|--------|----------|---------|---------| 
-| **DeepSeek** ⭐ | `deepseek` | `deepseek-chat` | 自动补全 `/v1` |
-| **Ollama** (本地) | `ollama` | `qwen3:32b` | 本地推荐 |
-| **Moonshot** | `moonshot` | `moonshot-v1-8k` | Kimi |
-| **Yi** | `yi` | `yi-lightning` | 零一万物 |
-| **SiliconFlow** | `siliconflow` | `deepseek-ai/DeepSeek-V3` | 硅基流动 |
-| **DashScope** | `dashscope` | `qwen-plus` | 通义千问 |
-| **OpenAI** | `openai` | `gpt-4o` | 标准 |
+| 你的模型 | 设置 `provider` 为 | 插件自动修正行为 |
+| :--- | :--- | :--- |
+| **DeepSeek** | `"deepseek"` | 自动补全 `https://api.deepseek.com/v1` |
+| **Kimi (Moonshot)** | `"moonshot"` | 自动补全 Moonshot API 地址 |
+| **通义千问** | `"dashscope"` | 适配阿里云 DashScope 格式 |
+| **Ollama (本地)** | `"ollama"` | 自动适配本地 `http://localhost:11434` |
+| **OpenAI** | `"openai"` | 标准模式 |
 
 <details>
-<summary><strong>📋 各供应商详细配置（点击展开）</strong></summary>
-
-#### 🔥 DeepSeek（推荐国内用户）
-
-只需指定 `provider: "deepseek"`，无需手写 baseURL：
+<summary><strong>👇 点击查看完整配置示例</strong></summary>
 
 ```json
-"llm": {
-  "provider": "deepseek",
-  "config": {
-    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
-    "model": "deepseek-chat"
+"oss": {
+  "llm": {
+    "provider": "ollama",
+    "config": {
+      "model": "qwen3:32b",
+      "url": "http://127.0.0.1:11434"
+    }
   }
 }
 ```
-申请地址：[platform.deepseek.com](https://platform.deepseek.com)
-
-#### 🖥️ Ollama（本地 LLM）
-
-> ⚠️ 注意是 **`url`**，不是 `baseURL`！
-
-```json
-"llm": {
-  "provider": "ollama",
-  "config": {
-    "model": "qwen3:32b",
-    "url": "http://127.0.0.1:11434"
-  }
-}
-```
-
-推荐模型：`qwen3:32b`（最佳）→ `qwen2.5:14b`（平衡）→ `qwen2.5:7b`（轻量）
-
-#### 🇺🇸 OpenAI
-
-```json
-"llm": {
-  "provider": "openai",
-  "config": {
-    "apiKey": "sk-xxxxxxxxxxxxxxxxxxxxxxxx",
-    "model": "gpt-4o"
-  }
-}
-```
-
 </details>
 
 ---
 
-## 🛠️ 全部配置项
+## 🛠️ CLI 与工具
 
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `mode` | string | `"open-source"` | `"open-source"` 或 `"platform"` |
-| `userId` | string | `"default"` | 用户 ID，用于记忆隔离 |
-| `autoRecall` | bool | `true` | 对话前自动搜索相关记忆 |
-| `autoCapture` | bool | `true` | 对话后自动提取并存储新知识 |
-| `topK` | number | `5` | 每次召回的最大记忆条数 |
-| `searchThreshold` | number | `0.5` | 语义匹配阈值 (0-1) |
-| `gatewayPort` | number | `3000` | Gateway 端口（非默认端口时需设置） |
-| `maxMemoryCount` | number | `2000` | 最大记忆条数，超过自动删除最旧记忆（v0.4.1+） |
-| `proactiveChannel` | string | 自动检测 | 主动消息渠道 (`telegram`/`feishu`/`imessage`) |
-| `proactiveTarget` | string | 自动检测 | 目标 ID (chat_id / 手机号) |
+安装插件后，你的 Agent 将自动获得以下能力：
 
-### 嵌入模型选择
+| 工具 | 说明 | 智能特性 |
+| :--- | :--- | :--- |
+| `memory_search` | 搜索记忆 | 支持 `deep: true` 参数，穿透热库直达冷库 |
+| `memory_store` | 存储记忆 | 自动去重，提取关键事实 |
+| `memory_list` | 列出记忆 | 支持按 Session 或 Long-term 筛选 |
+| `memory_forget` | 遗忘记忆 | 真正的删除（GDPR 合规） |
 
-| 模型 | 维度 | 大小 | 语言 |
-|------|------|------|------|
-| `onnx-community/Qwen3-Embedding-0.6B-ONNX` ⭐ | 1024 | ~585MB（首次自动从 GitHub Releases 下载） | 100+ |
-| `Xenova/bge-small-en-v1.5` | 384 | ~130MB | 英文 |
-| `Xenova/multilingual-e5-large` | 1024 | ~2GB | 多语言 |
-
----
-
-## 🛠️ AI 工具 & CLI
-
-### AI 工具（自动注册）
-
-| 工具 | 说明 |
-|------|------|
-| `memory_search` | 语义搜索记忆 |
-| `memory_store` | 手动存储记忆 |
-| `memory_list` | 列出所有记忆 |
-| `memory_get` | 获取指定记忆 |
-| `memory_forget` | 删除记忆 |
-
-### CLI 命令
-
+你也可以在终端直接使用：
 ```bash
-openclaw mem0 search "用户的编程偏好"    # 搜索记忆
-openclaw mem0 stats                      # 查看统计
-openclaw mem0 list                       # 列出所有
+openclaw mem0 search "我的服务器密码" --deep  # 深度搜索
+openclaw mem0 stats                         # 查看热库/冷库状态
 ```
 
 ---
 
 ## 🔄 版本历史
 
-### v0.4.3 (深度检索)
-- **深度检索 (Deep Search)**：`memory_search` 工具新增 `deep` 选项。当热库中找不到信息时，Agent 可以主动开启深度模式，扫描归档的冷数据。
+### v0.4.3 (深度检索版)
+- **Deep Search**: 引入 `src/archive.ts`，支持对冷库进行流式正则搜索。
+- **Agentic Flow**: 更新 Tool Definition，教 Agent 何时使用深度搜索。
 
-### v0.4.2 (数据安全)
-- **安全修剪 (Safe Pruning)**：记忆修剪现在会先将旧记忆归档到 `mem0-archive.jsonl` 文件中，再从数据库删除。从此告别数据丢失焦虑。
+### v0.4.2 (数据安全版)
+- **Safe Pruning**: 记忆修剪策略升级为“先归档，后删除”。
+- **Persistence**: Active Brain 的待办事项现在会保存到磁盘。
 
-### v0.4.1 (数据库优化)
-- **记忆修剪 (Pruning)**：新增 `maxMemoryCount` 配置（默认 2000），启动时自动清理老旧记忆，防止数据库无限膨胀导致 CPU 飙升。
-
-### v0.4.0 (重大更新)
-- **架构重构**：完全模块化设计 (`src/`), 提升稳定性和可维护性。
-- **持久化大脑**：Active Brain 现在的待办事项会保存到磁盘，重启不丢失。
-- **智能配置**：新增 `deepseek`, `moonshot`, `yi`, `siliconflow` 等国产模型预设，自动修正 URL 错误。
-- **JSON 修复**：增强了对 LLM 返回非标准 JSON (Markdown 包裹) 的解析能力。
-
-### v0.3.10
-- 修复飞书/钉钉等扩展渠道主动推送失败。
-
-### v0.3.4
-- 修复国内模型下载失败，改为从 GitHub Releases 下载。
+### v0.4.0 (重构版)
+- **架构升级**: 代码完全模块化，提升稳定性。
+- **智能配置**: 自动修正国产模型 URL 配置错误。
 
 ---
 
