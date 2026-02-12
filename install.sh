@@ -43,18 +43,69 @@ echo -e "${BLUE}🚀 Installing dependencies...${NC}"
 cd "$INSTALL_DIR"
 npm install --production --no-audit --no-fund --silent
 
-# 6. Cleanup
+# 6. Configure OpenClaw (Enable Plugin & Disable Legacy Memory)
+echo -e "${BLUE}⚙️  Configuring OpenClaw...${NC}"
+CONFIG_FILE="$HOME/.openclaw/openclaw.json"
+
+if [ -f "$CONFIG_FILE" ]; then
+    # Create backup
+    cp "$CONFIG_FILE" "$CONFIG_FILE.bak"
+    
+    # Use python to safely update JSON
+    python3 -c "
+import sys, json, os
+
+config_path = os.path.expanduser('$CONFIG_FILE')
+try:
+    with open(config_path, 'r') as f:
+        data = json.load(f)
+
+    # 1. Enable Plugin
+    if 'plugins' not in data: data['plugins'] = {}
+    if 'entries' not in data['plugins']: data['plugins']['entries'] = {}
+    if 'slots' not in data['plugins']: data['plugins']['slots'] = {}
+    
+    # Set as default memory provider
+    data['plugins']['slots']['memory'] = 'openclaw-mem0'
+    
+    # Enable plugin entry if not exists
+    if 'openclaw-mem0' not in data['plugins']['entries']:
+        data['plugins']['entries']['openclaw-mem0'] = { 'enabled': True }
+    else:
+        data['plugins']['entries']['openclaw-mem0']['enabled'] = True
+
+    # 2. Disable Legacy Memory Hook (Prevent split-brain)
+    if 'hooks' not in data: data['hooks'] = {}
+    if 'internal' not in data['hooks']: data['hooks']['internal'] = {}
+    if 'entries' not in data['hooks']['internal']: data['hooks']['internal']['entries'] = {}
+    
+    if 'session-memory' not in data['hooks']['internal']['entries']:
+        data['hooks']['internal']['entries']['session-memory'] = {}
+    
+    data['hooks']['internal']['entries']['session-memory']['enabled'] = False
+    print('✅ Disabled legacy session-memory hook')
+
+    # Save
+    with open(config_path, 'w') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    
+    print('✅ Updated openclaw.json')
+except Exception as e:
+    print(f'⚠️  Config update failed: {e}')
+"
+else
+    echo -e "${YELLOW}⚠️  openclaw.json not found. Skipping auto-config.${NC}"
+fi
+
+# 7. Cleanup
 rm -rf "$TEMP_DIR"
 
-# 7. Success Message
+# 8. Success Message
 echo "----------------------------------------"
 echo -e "${GREEN}✅ Installation Complete!${NC}"
 echo ""
-echo -e "To enable the plugin, add this to your ${YELLOW}~/.openclaw/openclaw.json${NC}:"
+echo -e "The plugin has been enabled and legacy memory disabled."
+echo -e "Please restart OpenClaw Gateway to apply changes:"
 echo ""
-echo -e "${GREEN}\"openclaw-mem0\": {${NC}"
-echo -e "${GREEN}  \"enabled\": true${NC}"
-echo -e "${GREEN}}${NC}"
+echo -e "${BLUE}openclaw gateway restart${NC}"
 echo ""
-echo -e "Note: It will automatically use your main LLM configuration."
-echo -e "If you want to use a different model, you can add \"config\": { \"provider\": \"...\" }."

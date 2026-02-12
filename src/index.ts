@@ -294,7 +294,12 @@ const memoryPlugin = {
              results.push(...archiveResults);
           }
 
-          if (results.length === 0) return { content: [{ type: "text", text: "No relevant memories found." }] };
+          if (results.length === 0) {
+            api.logger.debug?.(`[mem0] 🔍 搜索 "${query}" 未找到相关记忆`);
+            return { content: [{ type: "text", text: "No relevant memories found." }] };
+          }
+
+          api.logger.info(`[mem0] 🔍 搜索 "${query}" 找到 ${results.length} 条记忆`);
 
           const text = results.map((r, i) => {
              const score = r.score ? ` (score: ${(r.score * 100).toFixed(0)}%)` : "";
@@ -573,6 +578,13 @@ const memoryPlugin = {
 
         try {
           const memories = await provider.search(event.prompt, buildSearchOptions());
+          
+          if (memories.length > 0) {
+            api.logger.info(`[mem0] 🧠 自动回忆: 找到 ${memories.length} 条相关记忆 (注入上下文)`);
+          } else {
+            api.logger.debug?.(`[mem0] 自动回忆: 未找到相关记忆`);
+          }
+
           const action = reflectionEngine.checkPendingActions();
           
           // Smart context injection with token budget management
