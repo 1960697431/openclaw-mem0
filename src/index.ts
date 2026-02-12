@@ -3,13 +3,33 @@ import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { type Mem0Config, type Mem0Mode, type MemoryItem, type SearchOptions, type AddOptions, type ListOptions, type PendingAction } from "./types.js";
 import { DEFAULT_CUSTOM_INSTRUCTIONS, DEFAULT_CUSTOM_CATEGORIES } from "./constants.js";
-import { resolveEnvVars, resolveEnvVarsDeep } from "./utils.js";
+import { resolveEnvVars, resolveEnvVarsDeep, fixLlmConfig, cleanJsonResponse } from "./utils.js";
 import { createProvider } from "./providers.js";
 import { ReflectionEngine } from "./reflection.js";
 import { checkForUpdates } from "./updater.js";
 import { ArchiveManager } from "./archive.js";
 import * as path from "node:path";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import { type OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { type Mem0Config, type Mem0Mode, type MemoryItem, type SearchOptions, type AddOptions, type ListOptions, type PendingAction } from "./types.js";
+import { DEFAULT_CUSTOM_INSTRUCTIONS, DEFAULT_CUSTOM_CATEGORIES } from "./constants.js";
+import { resolveEnvVars, resolveEnvVarsDeep, fixLlmConfig } from "./utils.js"; // Import fixLlmConfig here if needed, or rely on logic below
+
+// Helper to load main OpenClaw config
+function loadMainConfig(): Record<string, any> | null {
+  try {
+    const home = os.homedir();
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    if (fs.existsSync(configPath)) {
+      const content = fs.readFileSync(configPath, "utf-8");
+      return JSON.parse(content);
+    }
+  } catch (e) {
+    // Ignore errors, fallback to manual config
+  }
+  return null;
+}
 
 // ============================================================================
 // Config Parser
@@ -49,36 +69,70 @@ function parseConfig(value: unknown): Mem0Config {
   let ossConfig = cfg.oss as Record<string, unknown> | undefined;
   
   if (mode === "open-source") {
-    // If user provided root-level LLM config, map it to oss.llm
-    if (cfg.provider && typeof cfg.provider === "string") {
-      ossConfig = ossConfig || {};
-      
-      // Default Embedder (if not set)
-      if (!ossConfig.embedder) {
-        ossConfig.embedder = { 
-          provider: "transformersjs",
-          config: { model: "onnx-community/Qwen3-Embedding-0.6B-ONNX" }
-        };
-      }
+    ossConfig = ossConfig || {};
 
-      // Map LLM
+    // Default Embedder (if not set)
+    if (!ossConfig.embedder) {
+      ossConfig.embedder = { 
+        provider: "transformersjs",
+        config: { model: "onnx-community/Qwen3-Embedding-0.6B-ONNX" }
+      };
+    }
+
+    // Map LLM
+    // Scenario A: User provided explicit config in plugin
+    if (cfg.provider || cfg.apiKey) {
       if (!ossConfig.llm) {
         const llmConfig: Record<string, any> = {};
         if (cfg.apiKey) llmConfig.apiKey = cfg.apiKey;
         if (cfg.model) llmConfig.model = cfg.model;
         if (cfg.baseUrl) llmConfig.baseURL = cfg.baseUrl;
-        if (cfg.url) llmConfig.url = cfg.url; // For Ollama users using 'url' at root
+        if (cfg.url) llmConfig.url = cfg.url;
 
         ossConfig.llm = {
-          provider: cfg.provider,
+          provider: (cfg.provider as string) || "openai",
           config: llmConfig
         };
+      }
+    } 
+    // Scenario B: No config provided -> Inherit from Main Config
+    else if (!ossConfig.llm) {
+      const mainConfig = loadMainConfig();
+      if (mainConfig && mainConfig.llm) {
+        console.log("[mem0] 🔗 No plugin config found. Inheriting LLM config from OpenClaw main config.");
+        // We need to adapt OpenClaw's main LLM config format to Mem0's format
+        // Usually OpenClaw main config looks like: { llm: { provider: "openai", config: { ... } } }
+        // Or sometimes: { llm: { type: "openai", ... } }
+        // We assume it matches roughly or we map it.
+        const mainLlm = mainConfig.llm;
+        
+        // Map "type" to "provider" if needed
+        const provider = mainLlm.provider || mainLlm.type || "openai";
+        const config = mainLlm.config || mainLlm; // Fallback if it's flat
+
+        // Special handling: remove internal keys if any
+        const cleanConfig = { ...config };
+        
+        ossConfig.llm = {
+          provider,
+          config: cleanConfig
+        };
+      } else {
+        // Fallback warning handled downstream or it will fail gracefully
+        console.warn("[mem0] ⚠️ No LLM configured in plugin OR main config. Memory extraction will fail.");
       }
     }
   }
 
   if (mode === "platform" && (!cfg.apiKey || typeof cfg.apiKey !== "string")) {
     throw new Error("apiKey is required for platform mode");
+  }
+
+  // Auto-fix LLM config using our utility
+  if (ossConfig?.llm) {
+    const fixed = fixLlmConfig(ossConfig.llm.provider, ossConfig.llm.config);
+    ossConfig.llm.provider = fixed.provider;
+    ossConfig.llm.config = fixed.config;
   }
 
   // Resolve env vars
