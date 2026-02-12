@@ -233,39 +233,65 @@ export class OSSProvider implements Mem0Provider {
 
     const config: Record<string, unknown> = { version: "v1.1" };
     
+    // Ensure baseDir exists
+    if (!fs.existsSync(this.baseDir)) {
+      fs.mkdirSync(this.baseDir, { recursive: true });
+    }
+    
     // Auto-configure dims for Qwen3
     const isTransformer = this.ossConfig?.embedder?.provider?.toLowerCase() === "transformersjs";
     const embedderDims = this.ossConfig?.embedder?.config?.embeddingDims ?? (isTransformer ? 1024 : undefined);
 
     if (this.ossConfig?.embedder) config.embedder = this.ossConfig.embedder;
 
-    // Vector Store config logic
+    // Vector Store config - use "memory" provider (which still uses SQLite internally)
+    // Valid providers: memory, qdrant, redis, supabase, vectorize, azure-ai-search
     if (this.ossConfig?.vectorStore) {
       const vectorStore = JSON.parse(JSON.stringify(this.ossConfig.vectorStore));
-      if (vectorStore.config?.dbPath) {
-        vectorStore.config.dbPath = this.resolvePath(vectorStore.config.dbPath);
+      const validProviders = ['memory', 'qdrant', 'redis', 'supabase', 'vectorize', 'azure-ai-search'];
+      if (!validProviders.includes((vectorStore.provider || '').toLowerCase())) {
+        this.logger?.warn(`[mem0] Invalid vectorStore provider '${vectorStore.provider}', using 'memory'`);
+        vectorStore.provider = 'memory';
       }
       if (!vectorStore.config?.dimension && embedderDims) {
         vectorStore.config = vectorStore.config || {};
         vectorStore.config.dimension = embedderDims;
       }
       config.vectorStore = vectorStore;
-    } else if (embedderDims) {
+    } else {
       config.vectorStore = {
         provider: "memory",
-        config: { dimension: embedderDims },
+        config: { dimension: embedderDims || 1024 },
       };
     }
 
     if (this.ossConfig?.llm) config.llm = this.ossConfig.llm;
 
-    if (this.ossConfig?.historyDbPath) {
-      config.historyDbPath = this.resolvePath(this.ossConfig.historyDbPath);
-    }
+    // Disable history to avoid extra SQLite databases
+    config.disableHistory = true;
 
     if (this.customPrompt) config.customPrompt = this.customPrompt;
 
-    this.memory = new Memory(config);
+    // CRITICAL: mem0ai/oss MemoryVectorStore uses process.cwd() for SQLite path
+    // We must change CWD to our data directory before creating Memory
+    const originalCwd = process.cwd();
+    const vectorDbPath = path.join(this.baseDir, "vector_store.db");
+    
+    // Pre-create the SQLite db file
+    try {
+      fs.closeSync(fs.openSync(vectorDbPath, 'a'));
+    } catch {}
+    
+    try {
+      process.chdir(this.baseDir);
+      this.memory = new Memory(config);
+    } catch (err: any) {
+      this.logger?.error(`[mem0] Memory init failed: ${err.message}`);
+      throw err;
+    } finally {
+      // Restore original CWD
+      try { process.chdir(originalCwd); } catch {}
+    }
   }
 
   // Adapter methods mapping unified interface to OSS SDK (camelCase)
