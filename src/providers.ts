@@ -3,6 +3,25 @@ import { type OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { type Mem0Config, type Mem0Provider, type AddOptions, type AddResult, type SearchOptions, type MemoryItem, type ListOptions } from "./types.js";
 import { TransformersJsEmbedder } from "./embedder.js";
 import { JsonCleaningLLM } from "./utils.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+
+// Helper to archive memories before deletion
+function archiveMemories(memories: MemoryItem[], baseDir: string, logger: any) {
+  if (!memories.length) return;
+  
+  const archivePath = path.join(baseDir, "mem0-archive.jsonl");
+  const archiveData = memories.map(m => JSON.stringify(m)).join("\n") + "\n";
+  
+  try {
+    fs.appendFileSync(archivePath, archiveData, "utf-8");
+    logger.info(`[mem0] Archived ${memories.length} memories to ${archivePath}`);
+  } catch (err) {
+    logger.error(`[mem0] Failed to archive memories: ${err}`);
+    // If archive fails, DO NOT proceed to delete? 
+    // Let's assume we shouldn't block pruning, but logging error is crucial.
+  }
+}
 
 // ============================================================================
 // Platform Provider
@@ -13,8 +32,10 @@ export class PlatformProvider implements Mem0Provider {
 
   constructor(
     private readonly apiKey: string,
-    private readonly orgId?: string,
-    private readonly projectId?: string,
+    private readonly orgId: string | undefined,
+    private readonly projectId: string | undefined,
+    private readonly logger: OpenClawPluginApi["logger"],
+    private readonly baseDir: string,
   ) { }
 
   private async ensureClient(): Promise<void> {
@@ -89,8 +110,14 @@ export class PlatformProvider implements Mem0Provider {
     const memories = await this.getAll({ user_id: userId });
     if (memories.length <= maxCount) return 0;
 
+    // Sort by created_at ascending (oldest first)
     memories.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
+    
+    // Identify items to prune
     const toDelete = memories.slice(0, memories.length - maxCount);
+
+    // Archive first (Safe Pruning)
+    archiveMemories(toDelete, this.baseDir, this.logger);
 
     let deleted = 0;
     // Sequential delete to be safe
@@ -291,6 +318,12 @@ export class OSSProvider implements Mem0Provider {
     memories.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
     const toDelete = memories.slice(0, memories.length - maxCount);
 
+    // Archive first (Safe Pruning)
+    // For OSS provider, baseDir is usually where the plugin runs or dbPath
+    // We can infer a safe archive location. Let's use the parent of the DB path or process.cwd/archive
+    const archiveDir = this.ossConfig?.historyDbPath ? path.dirname(this.resolvePath(this.ossConfig.historyDbPath)) : process.cwd();
+    archiveMemories(toDelete, archiveDir, this.logger);
+
     let deleted = 0;
     for (const mem of toDelete) {
       try {
@@ -337,6 +370,8 @@ export class OSSProvider implements Mem0Provider {
 }
 
 export function createProvider(cfg: Mem0Config, api: OpenClawPluginApi): Mem0Provider {
+  const pluginDir = api.resolvePath ? api.resolvePath(".") : process.cwd();
+
   if (cfg.mode === "open-source") {
     return new OSSProvider(
       cfg.oss,
@@ -345,5 +380,5 @@ export function createProvider(cfg: Mem0Config, api: OpenClawPluginApi): Mem0Pro
       api.logger,
     );
   }
-  return new PlatformProvider(cfg.apiKey!, cfg.orgId, cfg.projectId);
+  return new PlatformProvider(cfg.apiKey!, cfg.orgId, cfg.projectId, api.logger, pluginDir);
 }
