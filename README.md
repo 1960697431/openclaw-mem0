@@ -11,21 +11,47 @@
 
 ## ⚡ 极速安装 (v0.4.5+)
 
-**只需运行这一行命令，剩下的全自动完成：**
-
+### 1. 一键安装
+复制下方命令到终端运行：
 ```bash
 curl -sL https://raw.githubusercontent.com/1960697431/openclaw-mem0/main/install.sh | bash
 ```
 
-脚本会自动：
-1. 下载并安装插件
-2. **自动修改** `openclaw.json` 启用插件（零配置模式）
-3. 自动继承你的主 LLM 配置
+### 2. 启用插件 (零配置模式 ✨)
+修改 `~/.openclaw/openclaw.json`，只需**启用**即可：
 
-**安装完成后，直接重启 Gateway 即可：**
+```json
+{
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "openclaw-mem0": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+> **🎉 它是怎么工作的？**
+> 插件会自动读取 OpenClaw 的主 LLM 配置。如果你已经在 OpenClaw 里配好了 DeepSeek 或 Ollama，插件会直接“继承”过来用，无需重复配置！
+
+### 3. 重启 Gateway
 ```bash
 openclaw gateway restart
 ```
+*首次启动会自动下载嵌入模型（约 417MB，国内加速），请耐心等待几分钟。*
+
+---
+
+## 🔄 从旧版本升级
+
+如果你是 **v0.3.x 或更早版本**的用户，为了确保获得最新的架构和自动修复功能，**强烈建议**重新运行一次上方的安装脚本：
+
+```bash
+curl -sL https://raw.githubusercontent.com/1960697431/openclaw-mem0/main/install.sh | bash
+```
+*(放心：这只会升级代码结构，**绝不会删除**你现有的记忆数据)*
 
 ---
 
@@ -86,22 +112,18 @@ AI 会像人类一样思考：**“这事儿好像很久以前提过...”**，�
 
 ## 🔄 版本历史
 
-### v0.4.6 (数据迁移)
-- **数据分离**: 所有数据（热库/冷库）现在存储在 `~/.openclaw/data/mem0/`，卸载插件不会丢失记忆。
-- **自动迁移**: 安装脚本会自动禁用 OpenClaw 自带的旧版记忆功能，防止冲突。
-- **导入工具**: 新增 `openclaw mem0 import-legacy` 命令，一键导入旧版 `memory.md` 数据。
+### v0.4.6 (数据安全)
+- **Data Migration**: 新增 `import-legacy` 工具，支持从旧版 `memory.md` 迁移数据。
+- **Hotfix**: 修复了自动更新时的文件缺失隐患。
 
 ### v0.4.5 (零配置)
 - **Zero Config**: 自动继承 OpenClaw 主 LLM 配置，实现安装即用。
 - **Auto Fix**: 增强配置纠错能力。
 
-### v0.4.4 (极简配置)
-- **Flat Config**: 支持扁平化配置结构。
-
 ### v0.4.3 (深度检索)
 - **Deep Search**: 引入冷库流式搜索，AI 可按需查阅历史归档。
 
-### v0.4.2 (数据安全)
+### v0.4.2 (安全修剪)
 - **Safe Pruning**: 记忆修剪升级为“先归档，后删除”，彻底解决数据丢失焦虑。
 
 ### v0.4.0 (重构版)
