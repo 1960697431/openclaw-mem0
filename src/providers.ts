@@ -1,10 +1,60 @@
 
 import { type OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { type Mem0Config, type Mem0Provider, type AddOptions, type AddResult, type SearchOptions, type MemoryItem, type ListOptions } from "./types.js";
+import { type Mem0Config, type Mem0Provider, type AddOptions, type AddResult, type SearchOptions, type MemoryItem, type ListOptions, type Mem0Stats } from "./types.js";
 import { TransformersJsEmbedder } from "./embedder.js";
 import { JsonCleaningLLM } from "./utils.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+
+// ============================================================================
+// Write Queue - Protects SQLite from concurrent writes (SQLITE_BUSY)
+// ============================================================================
+class WriteQueue {
+  private queue: Array<() => Promise<any>> = [];
+  private processing = false;
+  private stats = { totalWrites: 0, queueMax: 0 };
+
+  async enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise((resolve, reject) => {
+      this.queue.push(async () => {
+        try {
+          const result = await fn();
+          resolve(result);
+        } catch (err) {
+          reject(err);
+        }
+      });
+      this.stats.queueMax = Math.max(this.stats.queueMax, this.queue.length);
+      this.process();
+    });
+  }
+
+  private async process() {
+    if (this.processing || this.queue.length === 0) return;
+    this.processing = true;
+    
+    while (this.queue.length > 0) {
+      const task = this.queue.shift()!;
+      try {
+        await task();
+        this.stats.totalWrites++;
+      } catch {
+        // Error already handled in the task wrapper
+      }
+      // Small delay between writes to reduce SQLite lock contention
+      await new Promise(r => setTimeout(r, 10));
+    }
+    
+    this.processing = false;
+  }
+
+  getStats() {
+    return { ...this.stats, currentQueue: this.queue.length };
+  }
+}
+
+// Shared write queue for all OSS operations
+const writeQueue = new WriteQueue();
 
 // Helper to archive memories before deletion
 function archiveMemories(memories: MemoryItem[], baseDir: string, logger: any) {
@@ -128,6 +178,32 @@ export class PlatformProvider implements Mem0Provider {
       } catch { /* ignore */ }
     }
     return deleted;
+  }
+
+  async getStats(): Promise<Mem0Stats> {
+    await this.ensureClient();
+    
+    let totalMemories = 0;
+    try {
+      const memories = await this.getAll({ user_id: "default" });
+      totalMemories = memories.length;
+    } catch {}
+
+    let archiveSize = 0;
+    try {
+      const archivePath = path.join(this.baseDir, "mem0-archive.jsonl");
+      if (fs.existsSync(archivePath)) {
+        archiveSize = fs.statSync(archivePath).size;
+      }
+    } catch {}
+
+    return {
+      totalMemories,
+      archiveSize,
+      dbSize: 0, // Platform mode uses cloud storage
+      writeQueueStats: { totalWrites: 0, queueMax: 0, currentQueue: 0 },
+      lastUpdated: new Date().toISOString(),
+    };
   }
 
   private normalizeMemoryItem(raw: any): MemoryItem {
@@ -297,10 +373,12 @@ export class OSSProvider implements Mem0Provider {
   // Adapter methods mapping unified interface to OSS SDK (camelCase)
   async add(messages: Array<{ role: string; content: string }>, options: AddOptions): Promise<AddResult> {
     await this.ensureMemory();
-    const opts: any = { userId: options.user_id };
-    if (options.run_id) opts.runId = options.run_id;
-    const result = await this.memory.add(messages, opts);
-    return this.normalizeAddResult(result);
+    return writeQueue.enqueue(async () => {
+      const opts: any = { userId: options.user_id };
+      if (options.run_id) opts.runId = options.run_id;
+      const result = await this.memory.add(messages, opts);
+      return this.normalizeAddResult(result);
+    });
   }
 
   async search(query: string, options: SearchOptions): Promise<MemoryItem[]> {
@@ -326,7 +404,6 @@ export class OSSProvider implements Mem0Provider {
     if (options.run_id) opts.runId = options.run_id;
     const results = await this.memory.getAll(opts);
     
-    // Handle SDK quirks where it might return array or object
     if (Array.isArray(results)) return results.map(this.normalizeMemoryItem);
     if (results?.results && Array.isArray(results.results)) return results.results.map(this.normalizeMemoryItem);
     return [];
@@ -334,7 +411,9 @@ export class OSSProvider implements Mem0Provider {
 
   async delete(memoryId: string): Promise<void> {
     await this.ensureMemory();
-    await this.memory.delete(memoryId);
+    return writeQueue.enqueue(async () => {
+      await this.memory.delete(memoryId);
+    });
   }
 
   async prune(userId: string, maxCount: number): Promise<number> {
@@ -345,8 +424,6 @@ export class OSSProvider implements Mem0Provider {
     memories.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime());
     const toDelete = memories.slice(0, memories.length - maxCount);
 
-    // Archive first (Safe Pruning)
-    // Use the consistent baseDir (plugin directory)
     archiveMemories(toDelete, this.baseDir, this.logger);
 
     let deleted = 0;
@@ -357,6 +434,47 @@ export class OSSProvider implements Mem0Provider {
       } catch { /* ignore */ }
     }
     return deleted;
+  }
+
+  async getStats(): Promise<Mem0Stats> {
+    await this.ensureMemory();
+    
+    // Get memory count
+    let totalMemories = 0;
+    try {
+      const memories = await this.getAll({ user_id: "default" });
+      totalMemories = memories.length;
+    } catch {}
+
+    // Get file sizes
+    let dbSize = 0;
+    let archiveSize = 0;
+    
+    try {
+      const dbPath = path.join(this.baseDir, "vector_store.db");
+      if (fs.existsSync(dbPath)) {
+        dbSize = fs.statSync(dbPath).size;
+      }
+    } catch {}
+
+    try {
+      const archivePath = path.join(this.baseDir, "mem0-archive.jsonl");
+      if (fs.existsSync(archivePath)) {
+        archiveSize = fs.statSync(archivePath).size;
+        // Estimate archived memory count (rough)
+        const content = fs.readFileSync(archivePath, "utf-8");
+        const lineCount = content.split("\n").filter((l: string) => l.trim()).length;
+        totalMemories += lineCount;
+      }
+    } catch {}
+
+    return {
+      totalMemories,
+      archiveSize,
+      dbSize,
+      writeQueueStats: writeQueue.getStats(),
+      lastUpdated: new Date().toISOString(),
+    };
   }
 
   // Normalization Helpers (Duplicate logic but keeps classes decoupled)

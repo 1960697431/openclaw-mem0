@@ -6,7 +6,7 @@ import { type OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 const GITHUB_REPO = "1960697431/openclaw-mem0";
 // This should match the package.json version
-const LOCAL_VERSION = "0.4.7"; 
+const LOCAL_VERSION = "0.4.8"; 
 
 const FILES_TO_UPDATE = [
   "package.json",

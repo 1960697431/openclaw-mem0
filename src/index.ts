@@ -1,13 +1,14 @@
 
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { type Mem0Config, type Mem0Mode, type MemoryItem, type SearchOptions, type AddOptions, type ListOptions, type PendingAction } from "./types.js";
+import { type Mem0Config, type Mem0Mode, type MemoryItem, type SearchOptions, type AddOptions, type ListOptions, type PendingAction, type Mem0Stats } from "./types.js";
 import { DEFAULT_CUSTOM_INSTRUCTIONS, DEFAULT_CUSTOM_CATEGORIES } from "./constants.js";
 import { resolveEnvVars, resolveEnvVarsDeep, fixLlmConfig, cleanJsonResponse } from "./utils.js";
 import { createProvider } from "./providers.js";
 import { ReflectionEngine } from "./reflection.js";
 import { checkForUpdates } from "./updater.js";
 import { ArchiveManager } from "./archive.js";
+import { buildMemoryContext, estimateTokens, type SmartInjectionConfig } from "./contextManager.js";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -314,6 +315,41 @@ const memoryPlugin = {
       }
     }, { name: "memory_get" });
 
+    // ── Tool: Stats ─────────────────────────────────────────────────────────
+    api.registerTool({
+      name: "memory_stats",
+      label: "Memory Stats",
+      description: "Get memory system statistics (count, storage size, health).",
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const stats = await provider.getStats();
+          const formatSize = (bytes: number) => {
+            if (bytes < 1024) return `${bytes} B`;
+            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+            return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+          };
+          
+          const summary = [
+            `📊 Memory Statistics`,
+            `━━━━━━━━━━━━━━━━━━━━`,
+            `Total Memories: ${stats.totalMemories}`,
+            `Hot Storage: ${formatSize(stats.dbSize)}`,
+            `Archive Size: ${formatSize(stats.archiveSize)}`,
+            `Write Queue: ${stats.writeQueueStats.currentQueue} pending (${stats.writeQueueStats.totalWrites} total)`,
+            `Last Updated: ${stats.lastUpdated}`,
+          ].join("\n");
+          
+          return {
+            content: [{ type: "text", text: summary }],
+            details: stats
+          };
+        } catch (err) {
+          return { content: [{ type: "text", text: `Error: ${err}` }] };
+        }
+      }
+    }, { name: "memory_stats" });
+
     // ── Tool: List ──────────────────────────────────────────────────────────
     api.registerTool({
       name: "memory_list",
@@ -424,7 +460,62 @@ const memoryPlugin = {
       });
 
       mem0.command("stats").action(async () => {
-        console.log({ mode: cfg.mode, user: cfg.userId, autoRecall: cfg.autoRecall });
+        try {
+          const stats = await provider.getStats();
+          const formatSize = (bytes: number) => {
+            if (bytes < 1024) return `${bytes} B`;
+            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+            return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+          };
+          
+          console.log("\n📊 OpenClaw Mem0 Statistics");
+          console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+          console.log(`Mode:           ${cfg.mode}`);
+          console.log(`User ID:        ${cfg.userId}`);
+          console.log(`Auto Recall:    ${cfg.autoRecall ? "✅" : "❌"}`);
+          console.log(`Auto Capture:   ${cfg.autoCapture ? "✅" : "❌"}`);
+          console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+          console.log(`Total Memories: ${stats.totalMemories}`);
+          console.log(`Hot Storage:    ${formatSize(stats.dbSize)}`);
+          console.log(`Archive Size:   ${formatSize(stats.archiveSize)}`);
+          console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+          console.log(`Write Queue:`);
+          console.log(`  - Pending:    ${stats.writeQueueStats.currentQueue}`);
+          console.log(`  - Total:      ${stats.writeQueueStats.totalWrites}`);
+          console.log(`  - Max Peak:   ${stats.writeQueueStats.queueMax}`);
+          console.log("");
+        } catch(e) { 
+          console.error("Failed to get stats:", e); 
+        }
+      });
+
+      mem0.command("dashboard").action(async () => {
+        try {
+          const stats = await provider.getStats();
+          const memories = await provider.getAll({ user_id: cfg.userId });
+          
+          console.log("\n╔════════════════════════════════════════════════════════════╗");
+          console.log("║               🧠 MEM0 MEMORY DASHBOARD                     ║");
+          console.log("╠════════════════════════════════════════════════════════════╣");
+          console.log(`║ Mode: ${cfg.mode.padEnd(20)} User: ${cfg.userId.padEnd(20)} ║`);
+          console.log("╠════════════════════════════════════════════════════════════╣");
+          console.log(`║ 📊 Total Memories: ${(stats.totalMemories.toString()).padEnd(38)} ║`);
+          console.log(`║ 💾 Hot Storage:    ${(stats.dbSize + " bytes").padEnd(38)} ║`);
+          console.log(`║ 📦 Archive Size:   ${(stats.archiveSize + " bytes").padEnd(38)} ║`);
+          console.log("╠════════════════════════════════════════════════════════════╣");
+          
+          if (memories.length > 0) {
+            console.log("║ 📝 Recent Memories:                                        ║");
+            const recent = memories.slice(-5).reverse();
+            for (const m of recent) {
+              const preview = m.memory.substring(0, 45) + (m.memory.length > 45 ? "..." : "");
+              console.log(`║   • ${preview.padEnd(53)} ║`);
+            }
+          }
+          console.log("╚════════════════════════════════════════════════════════════╝");
+        } catch(e) {
+          console.error("Failed to load dashboard:", e);
+        }
       });
     });
 
@@ -439,18 +530,34 @@ const memoryPlugin = {
         const sessionId = (ctx as any)?.sessionKey;
         if (sessionId) currentSessionId = sessionId;
 
-        const memories = await provider.search(event.prompt, buildSearchOptions());
-        const action = reflectionEngine.checkPendingActions();
-        
-        let context = "";
-        if (memories.length) {
-          context += `<relevant-memories>\n${memories.map(m => `- ${m.memory}`).join("\n")}\n</relevant-memories>`;
+        try {
+          const memories = await provider.search(event.prompt, buildSearchOptions());
+          const action = reflectionEngine.checkPendingActions();
+          
+          // Smart context injection with token budget management
+          const modelId = (ctx as any)?.modelId || (event as any).model || "default";
+          const injectionConfig: SmartInjectionConfig = {
+            modelId,
+            maxMemories: cfg.topK,
+          };
+          
+          const injection = buildMemoryContext(memories, injectionConfig);
+          
+          if (injection.truncated) {
+            api.logger.debug?.(`[mem0] Context truncated: ${injection.injectedCount}/${injection.totalMemories} memories, ~${injection.estimatedTokens} tokens`);
+          }
+          
+          let context = injection.context;
+          
+          if (action) {
+            context += `\n<proactive-insight>\nSYSTEM NOTICE: ${action.message}\n</proactive-insight>`;
+            api.logger.info(`[mem0] Injected proactive action: ${action.message}`);
+          }
+          
+          if (context) return { systemContext: context };
+        } catch (err) {
+          api.logger.warn(`[mem0] Auto-recall failed: ${err}`);
         }
-        if (action) {
-          context += `\n<proactive-insight>\nSYSTEM NOTICE: ${action.message}\n</proactive-insight>`;
-          api.logger.info(`[mem0] Injected proactive action: ${action.message}`);
-        }
-        if (context) return { systemContext: context };
       });
     }
 
@@ -479,8 +586,32 @@ const memoryPlugin = {
       });
     }
 
-    // Heartbeat for Active Brain
+    // Heartbeat for Active Brain and Status Updates
     let heartbeat: NodeJS.Timeout;
+    
+    const updateStatusFile = async () => {
+      try {
+        const stats = await provider.getStats();
+        const statusPath = path.join(dataDir, "mem0-status.json");
+        
+        const status = {
+          ...stats,
+          config: {
+            mode: cfg.mode,
+            userId: cfg.userId,
+            autoCapture: cfg.autoCapture,
+            autoRecall: cfg.autoRecall,
+            maxMemoryCount: cfg.maxMemoryCount,
+          },
+          version: "0.4.8",
+        };
+        
+        fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
+      } catch (err) {
+        // Silent fail - not critical
+      }
+    };
+    
     api.registerService({
       id: "openclaw-mem0",
       start: () => {
@@ -494,14 +625,20 @@ const memoryPlugin = {
           })
           .catch((err) => api.logger.warn(`[mem0] Prune failed: ${err}`));
 
+        // Initial status update
+        updateStatusFile();
+
         heartbeat = setInterval(() => {
-          // Just check/fire to update state. 
-          // Real proactive push would happen here. 
-          // For now, relies on next-turn injection.
-          reflectionEngine.checkPendingActions(); 
+          reflectionEngine.checkPendingActions();
+          // Update status file every minute
+          updateStatusFile().catch(() => {});
         }, 60000);
       },
-      stop: () => clearInterval(heartbeat)
+      stop: () => {
+        clearInterval(heartbeat);
+        // Final status update on shutdown
+        updateStatusFile().catch(() => {});
+      }
     });
   }
 };

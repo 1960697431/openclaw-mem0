@@ -88,6 +88,14 @@ export interface ListOptions {
   page_size?: number;
 }
 
+export interface Mem0Stats {
+  totalMemories: number;
+  archiveSize: number;
+  dbSize: number;
+  writeQueueStats: { totalWrites: number; queueMax: number; currentQueue: number };
+  lastUpdated: string;
+}
+
 export interface Mem0Provider {
   add(messages: Array<{ role: string; content: string }>, options: AddOptions): Promise<AddResult>;
   search(query: string, options: SearchOptions): Promise<MemoryItem[]>;
@@ -95,4 +103,5 @@ export interface Mem0Provider {
   getAll(options: ListOptions): Promise<MemoryItem[]>;
   delete(memoryId: string): Promise<void>;
   prune(userId: string, maxCount: number): Promise<number>;
+  getStats(): Promise<Mem0Stats>;
 }
