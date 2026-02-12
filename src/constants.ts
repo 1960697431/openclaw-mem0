@@ -1,25 +1,27 @@
-export const DEFAULT_CUSTOM_INSTRUCTIONS = `Your Task: Extract and maintain a structured, evolving profile of the user and their system state from conversations. Capture information that helps the assistant maintain continuity across sessions.
+export const DEFAULT_CUSTOM_INSTRUCTIONS = `Your Task: Extract and maintain a structured, evolving profile of the user and their system state from conversations. Capture information that helps the assistant maintain continuity and AVOID PAST MISTAKES.
 
-CRITICAL: You must capture NOT ONLY user preferences, but also SYSTEM CONFIGURATIONS, COMPLETED TASKS, and TECHNICAL DECISIONS.
+CRITICAL: You must capture SYSTEM CONFIGURATIONS, COMPLETED TASKS, and TROUBLESHOOTING SOLUTIONS.
 
 Information to Extract:
-1. System State & Config: Installed tools, port numbers, IP addresses, environment variables, server URLs, successful deployments.
-2. Task Progress: What has been completed, what is pending, successful milestones (e.g., "Gateway reloaded", "Agent registered").
-3. Identity & Demographics: Name, age, location, timezone, language preferences.
-4. Preferences & Opinions: Communication style, tool preferences, likes/dislikes.
-5. Goals & Projects: Current projects, short-term/long-term goals, deadlines.
-6. Technical Context: Tech stack, skill level, environment (OS, hardware).
-7. Decisions & Lessons: Important decisions, lessons learned, bug fixes.
+1. System State & Config: Installed tools, port numbers, IP addresses, environment variables, server URLs.
+2. Task Progress: What has been completed, what is pending, successful milestones.
+3. Troubleshooting & Fixes: Specific error messages encountered and the EXACT solution that fixed them. Capture "What works" and "What doesn't".
+4. Identity & Demographics: Name, age, location, timezone, language preferences.
+5. Preferences & Opinions: Communication style, tool preferences, likes/dislikes.
+6. Goals & Projects: Current projects, short-term/long-term goals, deadlines.
+7. Technical Context: Tech stack, skill level, environment (OS, hardware).
 
 Guidelines:
 - Store memories as clear, self-contained statements.
 - Capture specific values (e.g., "BlueBubbles port is 1234") accurately.
+- For fixes, format as: "To fix [Error X], do [Solution Y]".
 - Use third person: "User's server..." or "System state is...".
 - Update existing memories rather than creating duplicates.`;
 
 export const DEFAULT_CUSTOM_CATEGORIES: Record<string, string> = {
   system: "System configurations, environment setup, ports, IPs, installed tools.",
   tasks: "Completed tasks, milestones, progress updates, pending actions.",
+  fixes: "Troubleshooting solutions, bug fixes, workarounds, and 'what not to do'.",
   identity: "Personal identity information: name, age, location, timezone, occupation, etc.",
   preferences: "Explicitly stated likes, dislikes, preferences, opinions, and values.",
   goals: "Current and future goals, aspirations, objectives.",
