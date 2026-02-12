@@ -18,7 +18,9 @@ const ALLOWED_KEYS = [
   "mode", "apiKey", "userId", "orgId", "projectId", "autoCapture", "autoRecall",
   "customInstructions", "customCategories", "customPrompt", "enableGraph",
   "searchThreshold", "topK", "oss", "proactiveChannel", "proactiveTarget", "gatewayPort",
-  "maxMemoryCount"
+  "maxMemoryCount",
+  // Flat Config (Easy Mode) keys
+  "provider", "model", "baseUrl", "url"
 ];
 
 function parseConfig(value: unknown): Mem0Config {
@@ -33,15 +35,55 @@ function parseConfig(value: unknown): Mem0Config {
     console.warn(`[openclaw-mem0] Ignoring unknown keys: ${unknown.join(", ")}`);
   }
 
-  const mode: Mem0Mode = (cfg.mode === "oss" || cfg.mode === "open-source") ? "open-source" : "platform";
+  // 1. Detect Mode
+  // Default to "open-source" if not specified, unless it's platform specific keys
+  let mode: Mem0Mode = (cfg.mode === "oss" || cfg.mode === "open-source") ? "open-source" : "platform";
+  if (!cfg.mode) {
+     // Heuristic: if 'provider' (llm) is set, assume open-source. If 'orgId' is set, assume platform.
+     if (cfg.provider || cfg.oss) mode = "open-source";
+     else if (cfg.orgId || (cfg.apiKey && !cfg.provider)) mode = "platform"; // Platform uses apiKey at root without provider
+     else mode = "open-source"; // Fallback default
+  }
+
+  // 2. Handle Flat Config (Easy Mode) for Open Source
+  let ossConfig = cfg.oss as Record<string, unknown> | undefined;
+  
+  if (mode === "open-source") {
+    // If user provided root-level LLM config, map it to oss.llm
+    if (cfg.provider && typeof cfg.provider === "string") {
+      ossConfig = ossConfig || {};
+      
+      // Default Embedder (if not set)
+      if (!ossConfig.embedder) {
+        ossConfig.embedder = { 
+          provider: "transformersjs",
+          config: { model: "onnx-community/Qwen3-Embedding-0.6B-ONNX" }
+        };
+      }
+
+      // Map LLM
+      if (!ossConfig.llm) {
+        const llmConfig: Record<string, any> = {};
+        if (cfg.apiKey) llmConfig.apiKey = cfg.apiKey;
+        if (cfg.model) llmConfig.model = cfg.model;
+        if (cfg.baseUrl) llmConfig.baseURL = cfg.baseUrl;
+        if (cfg.url) llmConfig.url = cfg.url; // For Ollama users using 'url' at root
+
+        ossConfig.llm = {
+          provider: cfg.provider,
+          config: llmConfig
+        };
+      }
+    }
+  }
 
   if (mode === "platform" && (!cfg.apiKey || typeof cfg.apiKey !== "string")) {
     throw new Error("apiKey is required for platform mode");
   }
 
-  let ossConfig;
-  if (cfg.oss && typeof cfg.oss === "object") {
-    ossConfig = resolveEnvVarsDeep(cfg.oss as Record<string, unknown>);
+  // Resolve env vars
+  if (ossConfig) {
+    ossConfig = resolveEnvVarsDeep(ossConfig);
   }
 
   return {
