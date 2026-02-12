@@ -184,6 +184,7 @@ export class OSSProvider implements Mem0Provider {
     private readonly customPrompt: string | undefined,
     private readonly resolvePath: (p: string) => string,
     private readonly logger: OpenClawPluginApi["logger"],
+    private readonly baseDir: string,
   ) { }
 
   private async ensureMemory(): Promise<void> {
@@ -319,10 +320,8 @@ export class OSSProvider implements Mem0Provider {
     const toDelete = memories.slice(0, memories.length - maxCount);
 
     // Archive first (Safe Pruning)
-    // For OSS provider, baseDir is usually where the plugin runs or dbPath
-    // We can infer a safe archive location. Let's use the parent of the DB path or process.cwd/archive
-    const archiveDir = this.ossConfig?.historyDbPath ? path.dirname(this.resolvePath(this.ossConfig.historyDbPath)) : process.cwd();
-    archiveMemories(toDelete, archiveDir, this.logger);
+    // Use the consistent baseDir (plugin directory)
+    archiveMemories(toDelete, this.baseDir, this.logger);
 
     let deleted = 0;
     for (const mem of toDelete) {
@@ -378,6 +377,7 @@ export function createProvider(cfg: Mem0Config, api: OpenClawPluginApi): Mem0Pro
       cfg.customPrompt,
       (p) => api.resolvePath(p),
       api.logger,
+      pluginDir
     );
   }
   return new PlatformProvider(cfg.apiKey!, cfg.orgId, cfg.projectId, api.logger, pluginDir);

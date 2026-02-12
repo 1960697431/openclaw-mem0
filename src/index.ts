@@ -7,6 +7,7 @@ import { resolveEnvVars, resolveEnvVarsDeep } from "./utils.js";
 import { createProvider } from "./providers.js";
 import { ReflectionEngine } from "./reflection.js";
 import { checkForUpdates } from "./updater.js";
+import { ArchiveManager } from "./archive.js";
 import * as path from "node:path";
 import * as fs from "node:fs";
 
@@ -114,7 +115,7 @@ const memoryPlugin = {
     api.registerTool({
       name: "memory_search",
       label: "Memory Search",
-      description: "Search long-term memories. Use to get context on user preferences or past topics.",
+      description: "Search long-term memories. Use to get context on user preferences or past topics. If initial search yields nothing for a historical query, try again with deep=true to search the archive.",
       parameters: Type.Object({
         query: Type.String(),
         limit: Type.Optional(Type.Number()),
@@ -122,11 +123,14 @@ const memoryPlugin = {
         scope: Type.Optional(Type.Union([
           Type.Literal("session"), Type.Literal("long-term"), Type.Literal("all")
         ])),
+        deep: Type.Optional(Type.Boolean({ description: "Search cold archive (slower but deeper). Use only if standard search fails for old info." })),
       }),
       async execute(_id, params: any) {
-        const { query, limit, userId, scope = "all" } = params;
+        const { query, limit, userId, scope = "all", deep } = params;
         try {
           let results: MemoryItem[] = [];
+          
+          // 1. Standard Vector Search (Hot)
           if (scope === "long-term" || scope === "all") {
             const res = await provider.search(query, buildSearchOptions(userId, limit));
             results.push(...res);
@@ -141,9 +145,21 @@ const memoryPlugin = {
             }
           }
 
+          // 2. Deep Search (Cold Archive)
+          if (deep && (scope === "long-term" || scope === "all")) {
+             // Search archive and append
+             const archiveResults = await archiveManager.search(query, limit);
+             results.push(...archiveResults);
+          }
+
           if (results.length === 0) return { content: [{ type: "text", text: "No relevant memories found." }] };
 
-          const text = results.map((r, i) => `${i + 1}. ${r.memory} (score: ${((r.score ?? 0) * 100).toFixed(0)}%)`).join("\n");
+          const text = results.map((r, i) => {
+             const score = r.score ? ` (score: ${(r.score * 100).toFixed(0)}%)` : "";
+             const source = (r as any)._source === "archive" ? " [ARCHIVE]" : "";
+             return `${i + 1}. ${r.memory}${score}${source}`;
+          }).join("\n");
+
           return {
             content: [{ type: "text", text: `Found ${results.length} memories:\n${text}` }],
             details: { count: results.length, memories: results }
@@ -294,6 +310,7 @@ const memoryPlugin = {
     // ── Lifecycle ───────────────────────────────────────────────────────────
     const pluginDir = path.dirname(path.dirname(new URL(import.meta.url).pathname));
     const reflectionEngine = new ReflectionEngine(cfg.oss?.llm, api.logger, pluginDir);
+    const archiveManager = new ArchiveManager(pluginDir, api.logger);
 
     if (cfg.autoRecall) {
       api.on("before_agent_start", async (event, ctx) => {

@@ -269,6 +269,9 @@ openclaw mem0 list                       # 列出所有
 
 ## 🔄 版本历史
 
+### v0.4.3 (深度检索)
+- **深度检索 (Deep Search)**：`memory_search` 工具新增 `deep` 选项。当热库中找不到信息时，Agent 可以主动开启深度模式，扫描归档的冷数据。
+
 ### v0.4.2 (数据安全)
 - **安全修剪 (Safe Pruning)**：记忆修剪现在会先将旧记忆归档到 `mem0-archive.jsonl` 文件中，再从数据库删除。从此告别数据丢失焦虑。
 
