@@ -11,10 +11,6 @@ import { ArchiveManager } from "./archive.js";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { type OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { type Mem0Config, type Mem0Mode, type MemoryItem, type SearchOptions, type AddOptions, type ListOptions, type PendingAction } from "./types.js";
-import { DEFAULT_CUSTOM_INSTRUCTIONS, DEFAULT_CUSTOM_CATEGORIES } from "./constants.js";
-import { resolveEnvVars, resolveEnvVarsDeep, fixLlmConfig } from "./utils.js"; // Import fixLlmConfig here if needed, or rely on logic below
 
 // Helper to load main OpenClaw config
 function loadMainConfig(): Record<string, any> | null {
@@ -40,7 +36,7 @@ const ALLOWED_KEYS = [
   "searchThreshold", "topK", "oss", "proactiveChannel", "proactiveTarget", "gatewayPort",
   "maxMemoryCount",
   // Flat Config (Easy Mode) keys
-  "provider", "model", "baseUrl", "url"
+  "provider", "model", "baseUrl", "baseURL", "url"
 ];
 
 function parseConfig(value: unknown): Mem0Config {
@@ -437,6 +433,7 @@ const memoryPlugin = {
     const reflectionEngine = new ReflectionEngine(cfg.oss?.llm, api.logger, dataDir);
     const archiveManager = new ArchiveManager(dataDir, api.logger);
 
+    if (cfg.autoRecall) {
       api.on("before_agent_start", async (event, ctx) => {
         if (!event.prompt || event.prompt.length < 5) return;
         const sessionId = (ctx as any)?.sessionKey;

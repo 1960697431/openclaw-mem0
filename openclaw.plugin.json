@@ -92,8 +92,29 @@
           "oss"
         ]
       },
+      "provider": {
+        "type": "string",
+        "description": "LLM Provider (e.g. deepseek, ollama, openai)"
+      },
       "apiKey": {
-        "type": "string"
+        "type": "string",
+        "description": "API Key for LLM or Platform"
+      },
+      "model": {
+        "type": "string",
+        "description": "Model name (e.g. deepseek-chat)"
+      },
+      "baseURL": {
+        "type": "string",
+        "description": "API Base URL (e.g. https://api.deepseek.com/v1)"
+      },
+      "url": {
+        "type": "string",
+        "description": "Ollama URL (e.g. http://localhost:11434)"
+      },
+      "maxMemoryCount": {
+        "type": "number",
+        "description": "Max memories in hot storage before pruning"
       },
       "userId": {
         "type": "string"

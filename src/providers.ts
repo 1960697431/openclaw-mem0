@@ -392,5 +392,3 @@ export function createProvider(cfg: Mem0Config, api: OpenClawPluginApi, dataDir:
   }
   return new PlatformProvider(cfg.apiKey!, cfg.orgId, cfg.projectId, api.logger, dataDir);
 }
-  return new PlatformProvider(cfg.apiKey!, cfg.orgId, cfg.projectId, api.logger, pluginDir);
-}
