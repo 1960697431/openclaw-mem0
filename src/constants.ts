@@ -1,23 +1,25 @@
-export const DEFAULT_CUSTOM_INSTRUCTIONS = `Your Task: Extract and maintain a structured, evolving profile of the user from their conversations with an AI assistant. Capture information that would help the assistant provide personalized, context-aware responses in future interactions.
+export const DEFAULT_CUSTOM_INSTRUCTIONS = `Your Task: Extract and maintain a structured, evolving profile of the user and their system state from conversations. Capture information that helps the assistant maintain continuity across sessions.
+
+CRITICAL: You must capture NOT ONLY user preferences, but also SYSTEM CONFIGURATIONS, COMPLETED TASKS, and TECHNICAL DECISIONS.
 
 Information to Extract:
-1. Identity & Demographics: Name, age, location, timezone, language preferences, occupation.
-2. Preferences & Opinions: Communication style, tool preferences, likes/dislikes.
-3. Goals & Projects: Current projects, short-term/long-term goals, deadlines.
-4. Technical Context: Tech stack, skill level, environment.
-5. Relationships: Colleagues, family, friends mentioned.
-6. Decisions & Lessons: Important decisions, lessons learned.
-7. Routines & Habits: Daily routines, work patterns.
-8. Life Events: Significant events, milestones.
+1. System State & Config: Installed tools, port numbers, IP addresses, environment variables, server URLs, successful deployments.
+2. Task Progress: What has been completed, what is pending, successful milestones (e.g., "Gateway reloaded", "Agent registered").
+3. Identity & Demographics: Name, age, location, timezone, language preferences.
+4. Preferences & Opinions: Communication style, tool preferences, likes/dislikes.
+5. Goals & Projects: Current projects, short-term/long-term goals, deadlines.
+6. Technical Context: Tech stack, skill level, environment (OS, hardware).
+7. Decisions & Lessons: Important decisions, lessons learned, bug fixes.
 
 Guidelines:
 - Store memories as clear, self-contained statements.
-- Use third person: "User prefers..." not "I prefer...".
-- Include temporal context when relevant.
-- Update existing memories rather than creating duplicates.
-- Exclude secrets, passwords, and temporary info.`;
+- Capture specific values (e.g., "BlueBubbles port is 1234") accurately.
+- Use third person: "User's server..." or "System state is...".
+- Update existing memories rather than creating duplicates.`;
 
 export const DEFAULT_CUSTOM_CATEGORIES: Record<string, string> = {
+  system: "System configurations, environment setup, ports, IPs, installed tools.",
+  tasks: "Completed tasks, milestones, progress updates, pending actions.",
   identity: "Personal identity information: name, age, location, timezone, occupation, etc.",
   preferences: "Explicitly stated likes, dislikes, preferences, opinions, and values.",
   goals: "Current and future goals, aspirations, objectives.",
@@ -28,8 +30,6 @@ export const DEFAULT_CUSTOM_CATEGORIES: Record<string, string> = {
   routines: "Daily habits, work patterns, schedules.",
   life_events: "Significant life events, milestones, transitions.",
   lessons: "Lessons learned, insights gained.",
-  work: "Work-related context: job responsibilities, workplace dynamics.",
-  health: "Health-related information voluntarily shared.",
 };
 
 export const REFLECTION_PROMPT = `You are a silent background memory analyzer for an AI assistant. Your job is to detect if the user has implied any future intent, reminder, follow-up, or recurring pattern.
