@@ -27,6 +27,7 @@ const SRC_FILES = [
   "src/embedder.ts",
   "src/reflection.ts",
   "src/contextManager.ts",
+  "src/contextMenager.ts",
   "src/ingestor.ts",
   "src/providers.ts",
   "src/updater.ts",

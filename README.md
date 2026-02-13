@@ -5,7 +5,7 @@
 基于 Mem0 构建的下一代智能记忆系统，专为 OpenClaw 设计。
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.2-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.6.3-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/OpenClaw-2026.2+-green.svg" alt="OpenClaw" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-orange.svg" alt="License" />
 </p>
@@ -23,6 +23,24 @@ curl -fsSL https://raw.githubusercontent.com/1960697431/openclaw-mem0/main/insta
 安装完成后重启 Gateway：
 ```bash
 openclaw gateway restart
+```
+
+如果你是老版本（如 `0.4.6`）且启动时报错 `Cannot find module ...contextManager.js`，请执行一次强制重装：
+
+```bash
+rm -rf ~/.openclaw/extensions/openclaw-mem0 ~/.openclaw/extensions/openclaw-meme
+curl -fsSL https://raw.githubusercontent.com/1960697431/openclaw-mem0/main/install.sh | bash
+openclaw gateway restart
+```
+
+可选：检查当前插件版本
+
+```bash
+python3 - <<'PY'
+import json, os
+p = os.path.expanduser("~/.openclaw/extensions/openclaw-mem0/package.json")
+print(json.load(open(p, "r", encoding="utf-8")).get("version"))
+PY
 ```
 
 *首次启动会自动下载嵌入模型（~417MB），请等待 2-3 分钟。*
@@ -198,6 +216,11 @@ cat ~/.openclaw/data/mem0/mem0-status.json
 ---
 
 ## 🔄 版本历史
+
+### v0.6.3 (兼容性修复)
+- 🛟 **老版本救援**: 插件入口切换为桥接 `index.ts`，启动时可自动补齐缺失 `src/*` 文件，避免因部分更新直接崩溃。
+- 🛠️ **拼写兼容**: 新增 `contextMenager.ts` 兼容别名，修复旧版错误导入导致的 `Cannot find module`。
+- 🧰 **安装器增强**: 安装时自动清理旧目录 `openclaw-meme`，减少升级残留冲突。
 
 ### v0.6.2 (自动捕捉与可用性优化)
 - 🆕 **自动捕捉降噪**: 增加低信号消息过滤、超长内容预算裁剪、重复批次去重（TTL 指纹），减少无效写入。

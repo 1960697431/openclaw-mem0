@@ -6,6 +6,7 @@ set -e
 REPO="1960697431/openclaw-mem0"
 BRANCH="main"
 INSTALL_DIR="$HOME/.openclaw/extensions/openclaw-mem0"
+LEGACY_INSTALL_DIR="$HOME/.openclaw/extensions/openclaw-meme"
 TEMP_DIR=$(mktemp -d)
 ZIP_URL="https://github.com/$REPO/archive/refs/heads/$BRANCH.zip"
 
@@ -55,6 +56,10 @@ fi
 
 # 4. Prepare Directory
 echo -e "${BLUE}📂 Preparing installation directory...${NC}"
+if [ -d "$LEGACY_INSTALL_DIR" ]; then
+    echo -e "${BLUE}🧹 Removing legacy directory: $LEGACY_INSTALL_DIR${NC}"
+    rm -rf "$LEGACY_INSTALL_DIR"
+fi
 rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 cp -R "$EXTRACTED_DIR"/. "$INSTALL_DIR"/
