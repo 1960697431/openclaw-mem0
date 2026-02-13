@@ -158,9 +158,34 @@ cat ~/.openclaw/data/mem0/mem0-status.json
 | `topK` | 搜索返回数量 | 5 |
 | `searchThreshold` | 相关度阈值 | 0.5 |
 
+### MiniMax 推荐配置（避坑）
+
+如果你使用 MiniMax，建议显式指定 `baseURL` 为 v2 聊天端点，避免返回 HTML 页面或空 JSON 导致事实提取失败：
+
+```json
+"openclaw-mem0": {
+  "enabled": true,
+  "config": {
+    "provider": "minimax",
+    "apiKey": "your-minimax-api-key",
+    "baseURL": "https://api.minimaxi.com/v1/text/chatcompletion_v2",
+    "model": "abab6.5-chat"
+  }
+}
+```
+
+补充说明：
+- 插件已支持自动清理 `<think>`/`reasoning` 等思考内容，再做 JSON 解析。
+- 当模型在 JSON 模式下返回空内容或无效 JSON 时，会自动降级为 `{}`，避免 `Unexpected end of JSON input` 中断写入。
+
 ---
 
 ## 🔄 版本历史
+
+### v0.6.1 (兼容性热修复)
+- 🐛 修复部分模型在 `json_object` 模式下返回空内容导致 `Unexpected end of JSON input` 的问题（增加 JSON 兜底）。
+- 🐛 修复部分错误 `baseURL` 返回 HTML（`<!DOCTYPE ...`）时的解析失败，错误信息更明确。
+- ✅ MiniMax 端点规范化：默认与推荐配置统一到 `.../v1/text/chatcompletion_v2`。
 
 ### v0.6.0 (重大性能与兼容性更新)
 - 🆕 **多格式远端 Embedding**: 支持 Gemini、Ollama、OpenAI 等多种远端向量模型，不再局限于本地运行。

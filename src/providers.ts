@@ -2,7 +2,7 @@
 import { type OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { type Mem0Config, type Mem0Provider, type AddOptions, type AddResult, type SearchOptions, type MemoryItem, type ListOptions, type Mem0Stats } from "./types.js";
 import { TransformersJsEmbedder, RemoteEmbedder, isRemoteEmbedderProvider, normalizeRemoteEmbedderConfig } from "./embedder.js";
-import { JsonCleaningLLM } from "./utils.js";
+import { cleanJsonResponse } from "./utils.js";
 import { UnifiedLLM, createLLM } from "./llm.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -131,16 +131,32 @@ class UnifiedLLMAdapter {
     });
   }
 
+  private ensureJsonObjectResponse(raw: string): string {
+    const cleaned = cleanJsonResponse(raw || "").trim();
+    if (!cleaned) {
+      this.logger.warn("[mem0] LLM returned empty JSON-mode response, falling back to {}");
+      return "{}";
+    }
+    try {
+      JSON.parse(cleaned);
+      return cleaned;
+    } catch {
+      this.logger.warn(`[mem0] LLM returned invalid JSON-mode response, fallback to {}. preview=${cleaned.slice(0, 120)}`);
+      return "{}";
+    }
+  }
+
   async generate(
     messages: Array<{ role: string; content: string }>,
     options?: { responseFormat?: { type: string }; temperature?: number }
   ): Promise<string> {
     try {
+      const jsonMode = options?.responseFormat?.type === "json_object";
       const result = await this.unifiedLLM.generate(this.normalizeMessages(messages), {
-        jsonMode: options?.responseFormat?.type === "json_object",
+        jsonMode,
         temperature: options?.temperature,
       });
-      return result;
+      return jsonMode ? this.ensureJsonObjectResponse(result) : result;
     } catch (error: any) {
       this.logger.error(`[mem0] UnifiedLLM generation failed: ${error.message}`);
       throw error;

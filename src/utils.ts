@@ -43,7 +43,8 @@ export function fixLlmConfig(provider: string, config: Record<string, unknown>):
     "siliconflow": "https://api.siliconflow.cn/v1",
     "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "zhipu": "https://open.bigmodel.cn/api/paas/v4",
-    "minimax": "https://api.minimax.chat/v1",
+    // MiniMax chat-completions endpoint (v2 format) is required for mem0 JSON extraction.
+    "minimax": "https://api.minimaxi.com/v1/text/chatcompletion_v2",
     "openrouter": "https://openrouter.ai/api/v1",
     "baichuan": "https://api.baichuan-ai.com/v1",
     "doubao": "https://ark.cn-beijing.volces.com/api/v3",

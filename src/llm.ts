@@ -51,6 +51,26 @@ interface ChatCompletion {
   };
 }
 
+async function parseJsonResponse(response: Response, label: string, url: string): Promise<any> {
+  const bodyText = await response.text();
+  const shortBody = bodyText.slice(0, 240).replace(/\s+/g, " ").trim();
+  const contentType = response.headers.get("content-type") || "";
+
+  if (!response.ok) {
+    throw new Error(`${label} API error: ${response.status} ${response.statusText} (${url}) - ${shortBody}`);
+  }
+
+  if (!contentType.toLowerCase().includes("json")) {
+    throw new Error(`${label} returned non-JSON content (${contentType || "unknown"}) from ${url}: ${shortBody}`);
+  }
+
+  try {
+    return JSON.parse(bodyText);
+  } catch (err: any) {
+    throw new Error(`${label} returned invalid JSON from ${url}: ${shortBody} (${err.message})`);
+  }
+}
+
 function extractContentText(content: any): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -198,6 +218,30 @@ export class UnifiedLLM {
     return AbortSignal.timeout(timeoutMs);
   }
 
+  private resolveMiniMaxUrl(): string {
+    const configured = (this.config.baseURL || "").trim();
+    if (!configured) {
+      return "https://api.minimaxi.com/v1/text/chatcompletion_v2";
+    }
+
+    let url = configured.replace(/\/$/, "");
+    // Common copy-paste of OpenAI path - MiniMax expects v2 endpoint.
+    url = url.replace(/\/chat\/completions$/i, "");
+
+    if (url.endsWith("/text/chatcompletion_v2")) return url;
+
+    // Older root/base patterns.
+    if (url.endsWith("/v1")) return `${url}/text/chatcompletion_v2`;
+    if (url.endsWith("/api/v1")) return `${url}/text/chatcompletion_v2`;
+
+    // Users sometimes reuse anthropic endpoint from OpenClaw model provider.
+    if (url.includes("/anthropic")) {
+      return `${url.replace(/\/anthropic.*$/i, "")}/v1/text/chatcompletion_v2`;
+    }
+
+    return url;
+  }
+
   /**
    * Generate chat completion
    */
@@ -268,12 +312,7 @@ export class UnifiedLLM {
       signal: this.getTimeoutSignal(),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} - ${error}`);
-    }
-
-    const data = await response.json() as ChatCompletion;
+    const data = await parseJsonResponse(response, "OpenAI-compatible", url) as ChatCompletion;
     return extractOpenAIChoiceText(data.choices?.[0]);
   }
 
@@ -312,12 +351,7 @@ export class UnifiedLLM {
       signal: this.getTimeoutSignal(),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Ollama API error: ${response.status} - ${error}`);
-    }
-
-    const data = await response.json() as any;
+    const data = await parseJsonResponse(response, "Ollama", url) as any;
     return extractContentText(data?.message?.content) || data?.message?.content || "";
   }
 
@@ -365,12 +399,7 @@ export class UnifiedLLM {
       signal: this.getTimeoutSignal(),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Anthropic API error: ${response.status} - ${error}`);
-    }
-
-    const data = await response.json() as any;
+    const data = await parseJsonResponse(response, "Anthropic", url) as any;
     const contentList = Array.isArray(data.content) ? data.content : [];
     const text = contentList
       .map((item: any) => (typeof item?.text === "string" ? item.text : ""))
@@ -431,12 +460,7 @@ export class UnifiedLLM {
       signal: this.getTimeoutSignal(),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Gemini API error: ${response.status} - ${error}`);
-    }
-
-    const data = await response.json() as any;
+    const data = await parseJsonResponse(response, "Gemini", fullUrl) as any;
     const parts = data?.candidates?.[0]?.content?.parts;
     if (!Array.isArray(parts)) return "";
     return parts
@@ -453,13 +477,18 @@ export class UnifiedLLM {
     // MiniMax uses OpenAI-compatible format but with some differences
     const groupId = this.config.minimax?.groupId;
     
-    // Use default URL if no baseURL provided, or use provided baseURL as-is (assuming full endpoint)
-    // Do NOT append /chat/completions because MiniMax uses /text/chatcompletion_v2
-    const url = this.config.baseURL || `https://api.minimax.chat/v1/text/chatcompletion_v2`;
+    const url = this.resolveMiniMaxUrl();
 
     // Map user-friendly model names to API IDs
     let model = this.config.model;
-    if (model.toLowerCase() === "minimax-m2.5" || model.toLowerCase() === "minimax2.5") {
+    const normalizedModel = model.toLowerCase();
+    if (
+      normalizedModel === "minimax-m2.5" ||
+      normalizedModel === "minimax2.5" ||
+      normalizedModel.includes("m2.5") ||
+      normalizedModel.includes("lightning") ||
+      normalizedModel.includes("highspeed")
+    ) {
       model = "abab6.5-chat";
     }
 
@@ -494,12 +523,7 @@ export class UnifiedLLM {
       signal: this.getTimeoutSignal(),
     });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`MiniMax API error: ${response.status} - ${error}`);
-    }
-
-    const data = await response.json() as ChatCompletion;
+    const data = await parseJsonResponse(response, "MiniMax", url) as ChatCompletion;
     return extractOpenAIChoiceText(data.choices?.[0]);
   }
 }
