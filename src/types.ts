@@ -15,7 +15,22 @@ export type Mem0Config = {
   oss?: {
     embedder?: { provider: string; config: Record<string, unknown> };
     vectorStore?: { provider: string; config: Record<string, unknown> };
-    llm?: { provider: string; config: Record<string, unknown> };
+    llm?: { 
+      provider: string; 
+      config: {
+        apiKey: string;
+        model: string;
+        baseURL?: string;
+        temperature?: number;
+        maxTokens?: number;
+        topP?: number;
+        timeout?: number;
+        headers?: Record<string, string>;
+        apiFormat?: "openai" | "anthropic" | "gemini" | "minimax" | "deepseek" | "zhipu" | "ollama" | "custom";
+        minimax?: { groupId?: string };
+        gemini?: { apiVersion?: string };
+      } & Record<string, unknown>;
+    };
     historyDbPath?: string;
   };
   // Shared

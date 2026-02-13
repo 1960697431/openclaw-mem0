@@ -1,14 +1,14 @@
 
 import { execSync } from "node:child_process";
-import { writeFileSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { type OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 const GITHUB_REPO = "1960697431/openclaw-mem0";
-// This should match the package.json version
-const LOCAL_VERSION = "0.5.2"; 
+const FALLBACK_LOCAL_VERSION = "0.0.0";
 
 const FILES_TO_UPDATE = [
+  "index.ts",
   "package.json",
   "README.md",
   "openclaw.plugin.json",
@@ -16,16 +16,28 @@ const FILES_TO_UPDATE = [
   "src/types.ts",
   "src/constants.ts",
   "src/utils.ts",
+  "src/llm.ts",
   "src/embedder.ts",
   "src/reflection.ts",
+  "src/contextManager.ts",
+  "src/ingestor.ts",
   "src/providers.ts",
-  "src/updater.ts"
+  "src/updater.ts",
+  "src/archive.ts"
 ];
 
 export async function checkForUpdates(api: OpenClawPluginApi, pluginDir: string) {
   const RAW_BASE = `https://raw.githubusercontent.com/${GITHUB_REPO}/main`;
 
   try {
+    let localVersion = FALLBACK_LOCAL_VERSION;
+    let localDeps = "{}";
+    try {
+      const localPkg = JSON.parse(readFileSync(join(pluginDir, "package.json"), "utf-8"));
+      localVersion = localPkg.version ?? FALLBACK_LOCAL_VERSION;
+      localDeps = JSON.stringify(localPkg.dependencies ?? {});
+    } catch {}
+
     // 1. Check remote version
     const pkgResponse = await fetch(`${RAW_BASE}/package.json`, { signal: AbortSignal.timeout(8000) });
     if (!pkgResponse.ok) return;
@@ -34,13 +46,13 @@ export async function checkForUpdates(api: OpenClawPluginApi, pluginDir: string)
     const remotePkg = JSON.parse(remotePkgText);
     const remoteVersion = remotePkg.version ?? "0.0.0";
 
-    if (remoteVersion === LOCAL_VERSION) {
-      api.logger.debug?.(`[mem0] v${LOCAL_VERSION} is up to date`);
+    if (remoteVersion === localVersion) {
+      api.logger.debug?.(`[mem0] v${localVersion} is up to date`);
       return;
     }
 
     // Simple semver check
-    const local = LOCAL_VERSION.split(".").map(Number);
+    const local = localVersion.split(".").map(Number);
     const remote = remoteVersion.split(".").map(Number);
     const isNewer = remote[0] > local[0] || 
                    (remote[0] === local[0] && remote[1] > local[1]) ||
@@ -48,16 +60,9 @@ export async function checkForUpdates(api: OpenClawPluginApi, pluginDir: string)
 
     if (!isNewer) return;
 
-    api.logger.warn(`[mem0] ⬆️ Found update v${remoteVersion} (current v${LOCAL_VERSION}). Updating...`);
+    api.logger.warn(`[mem0] ⬆️ Found update v${remoteVersion} (current v${localVersion}). Updating...`);
 
     // 2. Download files
-    // Check local dependencies first
-    let localDeps = "{}";
-    try {
-      const localPkg = JSON.parse(readFileSync(join(pluginDir, "package.json"), "utf-8"));
-      localDeps = JSON.stringify(localPkg.dependencies ?? {});
-    } catch {}
-
     for (const file of FILES_TO_UPDATE) {
       try {
         const res = await fetch(`${RAW_BASE}/${file}`, { signal: AbortSignal.timeout(15000) });
@@ -65,10 +70,12 @@ export async function checkForUpdates(api: OpenClawPluginApi, pluginDir: string)
           const content = await res.text();
           // Ensure directory exists for src/ files
           const targetPath = join(pluginDir, file);
-          const targetDir = join(pluginDir, file.includes("/") ? "src" : ""); // Simple logic for now
+          const targetDir = file.includes("/")
+            ? join(pluginDir, file.split("/").slice(0, -1).join("/"))
+            : pluginDir;
           
           if (!existsSync(targetDir)) {
-             // We assume src exists because we are running from it, but good to be safe
+            mkdirSync(targetDir, { recursive: true });
           }
           
           writeFileSync(targetPath, content, "utf-8");
@@ -98,8 +105,17 @@ export async function checkForUpdates(api: OpenClawPluginApi, pluginDir: string)
     
     // 4. Restart
     setTimeout(() => {
-      try { process.kill(process.pid, "SIGHUP"); } 
-      catch { process.exit(1); }
+      try {
+        if (process.platform === "win32") {
+          process.exit(0);
+          return;
+        }
+        process.kill(process.pid, "SIGHUP");
+        // Fallback if SIGHUP is ignored in current runtime.
+        setTimeout(() => process.exit(0), 1500);
+      } catch {
+        process.exit(0);
+      }
     }, 5000);
 
   } catch (err) {

@@ -36,11 +36,18 @@ export function fixLlmConfig(provider: string, config: Record<string, unknown>):
   const KNOWN_PROVIDERS: Record<string, string> = {
     "deepseek": "https://api.deepseek.com/v1",
     "moonshot": "https://api.moonshot.cn/v1",
+    "kimi": "https://api.moonshot.cn/v1",
+    "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "glm": "https://open.bigmodel.cn/api/paas/v4",
     "yi": "https://api.lingyiwanwu.com/v1",
     "siliconflow": "https://api.siliconflow.cn/v1",
     "dashscope": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "zhipu": "https://open.bigmodel.cn/api/paas/v4",
     "minimax": "https://api.minimax.chat/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "baichuan": "https://api.baichuan-ai.com/v1",
+    "doubao": "https://ark.cn-beijing.volces.com/api/v3",
+    "ark": "https://ark.cn-beijing.volces.com/api/v3",
   };
 
   if (KNOWN_PROVIDERS[prov]) {
@@ -58,6 +65,8 @@ export function fixLlmConfig(provider: string, config: Record<string, unknown>):
   // 2. Fix common URL mistakes for OpenAI-compatible providers
   if (prov === "openai" && cfg.baseURL && typeof cfg.baseURL === "string") {
     let url = cfg.baseURL.trim();
+    // Remove common endpoint-level mistakes
+    url = url.replace(/\/chat\/completions\/?$/i, "");
     
     // DeepSeek: https://api.deepseek.com -> https://api.deepseek.com/v1
     if (url.includes("api.deepseek.com") && !url.includes("/v1")) {
@@ -70,6 +79,18 @@ export function fixLlmConfig(provider: string, config: Record<string, unknown>):
     // Yi: https://api.lingyiwanwu.com -> https://api.lingyiwanwu.com/v1
     if (url.includes("api.lingyiwanwu.com") && !url.includes("/v1")) {
       url = url.replace(/\/$/, "") + "/v1";
+    }
+    // Baichuan: https://api.baichuan-ai.com -> https://api.baichuan-ai.com/v1
+    if (url.includes("api.baichuan-ai.com") && !url.includes("/v1")) {
+      url = url.replace(/\/$/, "") + "/v1";
+    }
+    // OpenRouter: https://openrouter.ai/api -> https://openrouter.ai/api/v1
+    if (url.includes("openrouter.ai/api") && !url.includes("/api/v1")) {
+      url = url.replace(/\/$/, "").replace(/\/api$/, "/api/v1");
+    }
+    // Doubao/Ark: https://ark.cn-beijing.volces.com -> https://ark.cn-beijing.volces.com/api/v3
+    if (url.includes("volces.com") && !url.includes("/api/v3")) {
+      url = url.replace(/\/$/, "") + "/api/v3";
     }
     
     cfg.baseURL = url;
@@ -93,6 +114,13 @@ export function cleanJsonResponse(content: string): string {
   if (!content || typeof content !== "string") return content;
 
   let cleaned = content.trim();
+  cleaned = cleaned
+    .replace(/```(?:thinking|reasoning|analysis)\s*[\s\S]*?```/gi, "")
+    .replace(/<\|begin_of_thought\|>[\s\S]*?<\|end_of_thought\|>/gi, "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "")
+    .trim();
 
   // Strategy 1: Full-text code block
   const fullMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);

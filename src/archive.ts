@@ -38,6 +38,7 @@ export class ArchiveManager {
     this.logger.debug?.(`[mem0] Deep search started for keywords: ${keywords.join(", ")}`);
 
     let scanned = 0;
+    let malformed = 0;
     for await (const line of rl) {
       scanned++;
       if (!line.trim()) continue;
@@ -60,7 +61,7 @@ export class ArchiveManager {
           results.push(mem);
         }
       } catch (e) {
-        // Ignore malformed lines
+        malformed++;
       }
     }
 
@@ -72,6 +73,9 @@ export class ArchiveManager {
     });
 
     this.logger.debug?.(`[mem0] Deep search scanned ${scanned} lines, found ${results.length} matches`);
+    if (malformed > 0) {
+      this.logger.debug?.(`[mem0] Deep search skipped ${malformed} malformed archive lines`);
+    }
 
     return results.slice(0, limit);
   }

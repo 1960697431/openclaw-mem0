@@ -23,8 +23,11 @@ const SRC_FILES = [
   "src/types.ts",
   "src/constants.ts",
   "src/utils.ts",
+  "src/llm.ts",
   "src/embedder.ts",
   "src/reflection.ts",
+  "src/contextManager.ts",
+  "src/ingestor.ts",
   "src/providers.ts",
   "src/updater.ts",
   "src/archive.ts"
@@ -35,22 +38,19 @@ const GITHUB_BASE = "https://raw.githubusercontent.com/1960697431/openclaw-mem0/
 async function ensureSourceFiles() {
   const srcDir = path.join(__dirname, "src");
   
-  // Quick check: if src/index.ts exists, we are likely good
-  if (fs.existsSync(path.join(srcDir, "index.ts"))) {
+  const missingFiles = SRC_FILES.filter((file) => !fs.existsSync(path.join(__dirname, file)));
+  if (missingFiles.length === 0) {
     return;
   }
 
-  console.log("[mem0] ⚠️ Detected partial update (missing src folder). Starting self-repair migration...");
+  console.log(`[mem0] ⚠️ Detected partial update (${missingFiles.length} missing files). Starting self-repair migration...`);
 
   if (!fs.existsSync(srcDir)) {
     fs.mkdirSync(srcDir, { recursive: true });
   }
 
-  for (const file of SRC_FILES) {
+  for (const file of missingFiles) {
     const targetPath = path.join(__dirname, file); // e.g. /.../src/utils.ts
-    // Skip if already exists
-    if (fs.existsSync(targetPath)) continue;
-
     console.log(`[mem0] ⬇️ Downloading missing file: ${file}...`);
     try {
       const res = await fetch(`${GITHUB_BASE}/${file}`);

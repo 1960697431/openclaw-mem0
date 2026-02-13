@@ -13,6 +13,22 @@ import { MemoryIngestor } from "./ingestor.js";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { fileURLToPath } from "node:url";
+
+function readPluginVersion(): string {
+  try {
+    const currentFile = fileURLToPath(import.meta.url);
+    const pluginDir = path.dirname(path.dirname(currentFile));
+    const packagePath = path.join(pluginDir, "package.json");
+    if (!fs.existsSync(packagePath)) return "unknown";
+    const pkg = JSON.parse(fs.readFileSync(packagePath, "utf-8"));
+    return typeof pkg.version === "string" && pkg.version ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+const PLUGIN_VERSION = readPluginVersion();
 
 // Helper to load main OpenClaw config and extract default LLM settings
 function loadMainConfig(): Record<string, any> | null {
@@ -29,24 +45,43 @@ function loadMainConfig(): Record<string, any> | null {
   return null;
 }
 
+function inferProviderFromMainConfig(name: string, providerConfig: Record<string, any>): string {
+  const key = (name || "").toLowerCase();
+  const api = String(providerConfig?.api || "").toLowerCase();
+
+  if (api.includes("anthropic") || key.includes("anthropic") || key.includes("claude")) return "anthropic";
+  if (api.includes("gemini") || api.includes("google") || api.includes("generativelanguage") || key.includes("gemini")) return "gemini";
+  if (api.includes("ollama") || key.includes("ollama")) return "ollama";
+  if (api.includes("minimax") || key.includes("minimax")) return "minimax";
+  if (key.includes("deepseek")) return "deepseek";
+  if (key.includes("zhipu") || key.includes("glm")) return "zhipu";
+
+  return "openai";
+}
+
 // Extract default LLM config from OpenClaw main config
 function extractDefaultLlmConfig(mainConfig: Record<string, any>): { provider: string; config: Record<string, any> } | null {
   // Try models.providers first (newer structure)
   if (mainConfig.models?.providers) {
     const providers = mainConfig.models.providers;
     // Prefer certain providers in order
-    const preferredOrder = ['zhipu', 'deepseek', 'moonshot', 'openai', 'anthropic'];
+    const preferredOrder = ['zhipu', 'deepseek', 'moonshot', 'qwen', 'gemini', 'minimax', 'openai', 'anthropic', 'ollama'];
     
     for (const preferred of preferredOrder) {
       if (providers[preferred]) {
         const p = providers[preferred];
+        const provider = inferProviderFromMainConfig(preferred, p);
+        const baseURL = p.baseURL ?? p.baseUrl ?? p.url;
+        const config: Record<string, any> = {
+          apiKey: p.apiKey,
+          model: p.models?.[0]?.id || 'default',
+        };
+        if (provider === "ollama") config.url = baseURL;
+        else if (baseURL) config.baseURL = baseURL;
+
         return {
-          provider: p.api === 'anthropic-messages' ? 'anthropic' : 'openai',
-          config: {
-            apiKey: p.apiKey,
-            baseURL: p.baseUrl,
-            model: p.models?.[0]?.id || 'default',
-          }
+          provider,
+          config,
         };
       }
     }
@@ -55,13 +90,17 @@ function extractDefaultLlmConfig(mainConfig: Record<string, any>): { provider: s
     const firstProvider = Object.entries(providers)[0];
     if (firstProvider) {
       const [name, p] = firstProvider as [string, any];
+      const provider = inferProviderFromMainConfig(name, p);
+      const baseURL = p.baseURL ?? p.baseUrl ?? p.url;
+      const config: Record<string, any> = {
+        apiKey: p.apiKey,
+        model: p.models?.[0]?.id || 'default',
+      };
+      if (provider === "ollama") config.url = baseURL;
+      else if (baseURL) config.baseURL = baseURL;
       return {
-        provider: p.api === 'anthropic-messages' ? 'anthropic' : 'openai',
-        config: {
-          apiKey: p.apiKey,
-          baseURL: p.baseUrl,
-          model: p.models?.[0]?.id || 'default',
-        }
+        provider,
+        config,
       };
     }
   }
@@ -134,7 +173,8 @@ function parseConfig(value: unknown): Mem0Config {
         const llmConfig: Record<string, any> = {};
         if (cfg.apiKey) llmConfig.apiKey = cfg.apiKey;
         if (cfg.model) llmConfig.model = cfg.model;
-        if (cfg.baseUrl) llmConfig.baseURL = cfg.baseUrl;
+        const baseURL = (cfg.baseURL || cfg.baseUrl) as string | undefined;
+        if (baseURL) llmConfig.baseURL = baseURL;
         if (cfg.url) llmConfig.url = cfg.url;
 
         ossConfig.llm = {
@@ -168,10 +208,12 @@ function parseConfig(value: unknown): Mem0Config {
   }
 
   // Auto-fix LLM config using our utility
-  if (ossConfig?.llm) {
-    const fixed = fixLlmConfig(ossConfig.llm.provider, ossConfig.llm.config);
-    ossConfig.llm.provider = fixed.provider;
-    ossConfig.llm.config = fixed.config;
+  const ossAny = ossConfig as Record<string, any> | undefined;
+  const llmCfg = ossAny?.llm as { provider?: string; config?: Record<string, unknown> } | undefined;
+  if (llmCfg?.provider && llmCfg.config && typeof llmCfg.config === "object") {
+    const fixed = fixLlmConfig(llmCfg.provider, llmCfg.config);
+    llmCfg.provider = fixed.provider;
+    llmCfg.config = fixed.config;
   }
 
   // Resolve env vars
@@ -225,8 +267,57 @@ const memoryPlugin = {
 
     const provider = createProvider(cfg, api, dataDir);
     let currentSessionId: string | undefined;
+    const SEARCH_CACHE_TTL_MS = Math.max(5_000, Number(process.env.MEM0_SEARCH_CACHE_TTL_MS ?? 45_000) || 45_000);
+    const SEARCH_CACHE_MAX_ENTRIES = Math.max(16, Number(process.env.MEM0_SEARCH_CACHE_MAX ?? 128) || 128);
+    const searchCache = new Map<string, { expiresAt: number; results: MemoryItem[] }>();
 
     api.logger.info(`openclaw-mem0: registered (mode=${cfg.mode}, user=${cfg.userId})`);
+
+    const cloneMemories = (items: MemoryItem[]): MemoryItem[] => items.map((item) => ({ ...item }));
+    const clearSearchCache = () => {
+      if (searchCache.size > 0) searchCache.clear();
+    };
+    const makeSearchCacheKey = (
+      query: string,
+      limit: number,
+      userId: string,
+      scope: "session" | "long-term" | "all",
+      deep: boolean,
+      sessionId: string | undefined
+    ) => `${query.trim().toLowerCase()}|${limit}|${userId}|${scope}|${deep ? "1" : "0"}|${sessionId || "-"}`;
+    const getSearchCache = (key: string): MemoryItem[] | null => {
+      const now = Date.now();
+      const cached = searchCache.get(key);
+      if (!cached) return null;
+      if (cached.expiresAt <= now) {
+        searchCache.delete(key);
+        return null;
+      }
+      return cloneMemories(cached.results);
+    };
+    const setSearchCache = (key: string, results: MemoryItem[]) => {
+      if (!results.length) return;
+      const now = Date.now();
+      searchCache.set(key, {
+        expiresAt: now + SEARCH_CACHE_TTL_MS,
+        results: cloneMemories(results),
+      });
+      if (searchCache.size > SEARCH_CACHE_MAX_ENTRIES) {
+        const oldestKey = searchCache.keys().next().value;
+        if (oldestKey) searchCache.delete(oldestKey);
+      }
+    };
+    const formatSearchResult = (results: MemoryItem[]) => {
+      const text = results.map((r, i) => {
+        const score = r.score ? ` (score: ${(r.score * 100).toFixed(0)}%)` : "";
+        const source = (r as any)._source === "archive" ? " [ARCHIVE]" : "";
+        return `${i + 1}. ${r.memory}${score}${source}`;
+      }).join("\n");
+      return {
+        content: [{ type: "text", text: `Found ${results.length} memories:\n${text}` }],
+        details: { count: results.length, memories: results }
+      };
+    };
 
     // Helper builders
     const buildAddOptions = (userIdOverride?: string, runId?: string): AddOptions => {
@@ -271,28 +362,44 @@ const memoryPlugin = {
       async execute(_id, params: any) {
         const { query, limit, userId, scope = "all", deep } = params;
         try {
-          let results: MemoryItem[] = [];
-          
-          // 1. Standard Vector Search (Hot)
-          if (scope === "long-term" || scope === "all") {
-            const res = await provider.search(query, buildSearchOptions(userId, limit));
-            results.push(...res);
-          }
-          if ((scope === "session" || scope === "all") && currentSessionId) {
-            const res = await provider.search(query, buildSearchOptions(userId, limit, currentSessionId));
-            if (scope === "all") {
-              const ids = new Set(results.map(r => r.id));
-              results.push(...res.filter(r => !ids.has(r.id)));
-            } else {
-              results = res;
-            }
+          const effectiveLimit = limit ?? cfg.topK;
+          const effectiveUserId = userId || cfg.userId;
+          const cacheKey = makeSearchCacheKey(query, effectiveLimit, effectiveUserId, scope, Boolean(deep), currentSessionId);
+          const cachedResults = getSearchCache(cacheKey);
+          if (cachedResults) {
+            api.logger.debug?.(`[mem0] 🔍 搜索命中缓存: "${query}" (${cachedResults.length} 条)`);
+            return formatSearchResult(cachedResults);
           }
 
-          // 2. Deep Search (Cold Archive)
-          if (deep && (scope === "long-term" || scope === "all")) {
-             // Search archive and append
-             const archiveResults = await archiveManager.search(query, limit);
-             results.push(...archiveResults);
+          let results: MemoryItem[] = [];
+          const needLongTerm = scope === "long-term" || scope === "all";
+          const needSession = (scope === "session" || scope === "all") && Boolean(currentSessionId);
+          const needArchive = Boolean(deep) && needLongTerm;
+
+          const [longTermResults, sessionResults, archiveResults] = await Promise.all([
+            needLongTerm ? provider.search(query, buildSearchOptions(userId, limit)) : Promise.resolve([] as MemoryItem[]),
+            needSession ? provider.search(query, buildSearchOptions(userId, limit, currentSessionId)) : Promise.resolve([] as MemoryItem[]),
+            needArchive ? archiveManager.search(query, effectiveLimit) : Promise.resolve([] as MemoryItem[]),
+          ]);
+
+          const dedup = new Set<string>();
+          const pushUnique = (items: MemoryItem[]) => {
+            for (const item of items) {
+              if (!item || !item.id || dedup.has(item.id)) continue;
+              dedup.add(item.id);
+              results.push(item);
+            }
+          };
+
+          if (scope === "session") {
+            pushUnique(sessionResults);
+          } else if (scope === "long-term") {
+            pushUnique(longTermResults);
+            pushUnique(archiveResults);
+          } else {
+            pushUnique(longTermResults);
+            pushUnique(sessionResults);
+            pushUnique(archiveResults);
           }
 
           if (results.length === 0) {
@@ -301,17 +408,8 @@ const memoryPlugin = {
           }
 
           api.logger.info(`[mem0] 🔍 搜索 "${query}" 找到 ${results.length} 条记忆`);
-
-          const text = results.map((r, i) => {
-             const score = r.score ? ` (score: ${(r.score * 100).toFixed(0)}%)` : "";
-             const source = (r as any)._source === "archive" ? " [ARCHIVE]" : "";
-             return `${i + 1}. ${r.memory}${score}${source}`;
-          }).join("\n");
-
-          return {
-            content: [{ type: "text", text: `Found ${results.length} memories:\n${text}` }],
-            details: { count: results.length, memories: results }
-          };
+          setSearchCache(cacheKey, results);
+          return formatSearchResult(results);
         } catch (err) {
           return { content: [{ type: "text", text: `Error: ${err}` }] };
         }
@@ -333,6 +431,7 @@ const memoryPlugin = {
         try {
           const runId = !longTerm && currentSessionId ? currentSessionId : undefined;
           const res = await provider.add([{ role: "user", content: text }], buildAddOptions(userId, runId));
+          if (res.results.length > 0) clearSearchCache();
           return {
             content: [{ type: "text", text: `Stored ${res.results.length} memories.` }],
             details: res
@@ -352,6 +451,9 @@ const memoryPlugin = {
       async execute(_id, params: any) {
         try {
           const mem = await provider.get(params.memoryId);
+          if (!mem || typeof mem.memory !== "string" || mem.memory.trim().length === 0) {
+            return { content: [{ type: "text", text: "Memory not found." }] };
+          }
           return {
             content: [{ type: "text", text: `Memory: ${mem.memory}` }],
             details: mem
@@ -411,19 +513,32 @@ const memoryPlugin = {
         const uid = userId || cfg.userId;
         try {
           let memories: MemoryItem[] = [];
-          if (scope === "long-term" || scope === "all") {
-            const res = await provider.getAll({ user_id: uid });
-            memories.push(...res);
-          }
-          if ((scope === "session" || scope === "all") && currentSessionId) {
-            const res = await provider.getAll({ user_id: uid, run_id: currentSessionId });
-            if (scope === "all") {
-              const ids = new Set(memories.map(r => r.id));
-              memories.push(...res.filter(r => !ids.has(r.id)));
-            } else {
-              memories = res;
+          const needLongTerm = scope === "long-term" || scope === "all";
+          const needSession = (scope === "session" || scope === "all") && Boolean(currentSessionId);
+
+          const [longTermMemories, sessionMemories] = await Promise.all([
+            needLongTerm ? provider.getAll({ user_id: uid }) : Promise.resolve([] as MemoryItem[]),
+            needSession ? provider.getAll({ user_id: uid, run_id: currentSessionId }) : Promise.resolve([] as MemoryItem[]),
+          ]);
+
+          const dedup = new Set<string>();
+          const pushUnique = (items: MemoryItem[]) => {
+            for (const item of items) {
+              if (!item || !item.id || dedup.has(item.id)) continue;
+              dedup.add(item.id);
+              memories.push(item);
             }
+          };
+
+          if (scope === "session") {
+            pushUnique(sessionMemories);
+          } else if (scope === "long-term") {
+            pushUnique(longTermMemories);
+          } else {
+            pushUnique(longTermMemories);
+            pushUnique(sessionMemories);
           }
+
           return {
             content: [{ type: "text", text: `${memories.length} memories found.` }],
             details: { count: memories.length, memories }
@@ -447,12 +562,14 @@ const memoryPlugin = {
         try {
           if (params.memoryId) {
             await provider.delete(params.memoryId);
+            clearSearchCache();
             return { content: [{ type: "text", text: "Memory deleted." }] };
           }
           if (params.query) {
             const results = await provider.search(params.query, buildSearchOptions(undefined, 5));
             if (results.length === 1 || (results[0]?.score ?? 0) > 0.9) {
               await provider.delete(results[0].id);
+              clearSearchCache();
               return { content: [{ type: "text", text: `Deleted: ${results[0].memory}` }] };
             }
             return {
@@ -503,6 +620,7 @@ const memoryPlugin = {
            await provider.add([{ role: "user", content: line }], buildAddOptions());
            process.stdout.write(".");
         }
+        clearSearchCache();
         console.log("\n✅ Import complete. You can now disable the default memory.");
       });
 
@@ -573,6 +691,69 @@ const memoryPlugin = {
     const reflectionEngine = new ReflectionEngine(cfg.oss?.llm, api.logger, dataDir);
     const archiveManager = new ArchiveManager(dataDir, api.logger);
     const memoryIngestor = new MemoryIngestor(workspaceDir, provider, api.logger, cfg.userId);
+    const captureBatchWindowMs = Math.max(200, Number(process.env.MEM0_CAPTURE_BATCH_WINDOW_MS ?? 1200) || 1200);
+    const captureBatchMaxMessages = Math.max(10, Number(process.env.MEM0_CAPTURE_BATCH_MAX_MSGS ?? 30) || 30);
+    const captureBuffers = new Map<string, { sessionId?: string; messages: Array<{ role: "user" | "assistant"; content: string }> }>();
+    const captureTimers = new Map<string, NodeJS.Timeout>();
+
+    const getCaptureBufferKey = (sessionId?: string) => sessionId || "__global__";
+    const flushCaptureBuffer = async (bufferKey: string) => {
+      const timer = captureTimers.get(bufferKey);
+      if (timer) {
+        clearTimeout(timer);
+        captureTimers.delete(bufferKey);
+      }
+
+      const batch = captureBuffers.get(bufferKey);
+      if (!batch || !batch.messages.length) return;
+      captureBuffers.delete(bufferKey);
+
+      const compactMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
+      for (const message of batch.messages) {
+        const text = typeof message.content === "string" ? message.content.trim() : "";
+        if (!text) continue;
+        const previous = compactMessages[compactMessages.length - 1];
+        if (previous && previous.role === message.role && previous.content === text) continue;
+        compactMessages.push({ role: message.role, content: text });
+      }
+      const payload = compactMessages.slice(-captureBatchMaxMessages);
+      if (!payload.length) return;
+
+      try {
+        const res = await provider.add(payload as any, buildAddOptions(undefined, batch.sessionId));
+        if (res.results.length > 0) {
+          clearSearchCache();
+          api.logger.info(`[mem0] ✨ 批量捕获 ${payload.length} 条消息，提取 ${res.results.length} 条新记忆`);
+          const mergedQuery = payload.map((m) => m.content).join(" ").slice(0, 2000);
+          if (mergedQuery.trim()) {
+            const memories = await provider.search(mergedQuery, buildSearchOptions(undefined, cfg.topK));
+            reflectionEngine.reflect(payload as any, memories);
+          }
+        } else {
+          api.logger.debug?.(`[mem0] 批量捕获完成，但未提取到新记忆`);
+        }
+      } catch (err) {
+        api.logger.warn(`[mem0] 批量记忆捕获失败: ${err}`);
+      }
+    };
+    const scheduleCaptureBatch = (sessionId: string | undefined, messages: Array<{ role: "user" | "assistant"; content: string }>) => {
+      const bufferKey = getCaptureBufferKey(sessionId);
+      const current = captureBuffers.get(bufferKey) || { sessionId, messages: [] as Array<{ role: "user" | "assistant"; content: string }> };
+      current.sessionId = sessionId || current.sessionId;
+      current.messages.push(...messages);
+      if (current.messages.length > captureBatchMaxMessages) {
+        current.messages = current.messages.slice(-captureBatchMaxMessages);
+      }
+      captureBuffers.set(bufferKey, current);
+
+      if (captureTimers.has(bufferKey)) {
+        clearTimeout(captureTimers.get(bufferKey)!);
+      }
+      const timer = setTimeout(() => {
+        void flushCaptureBuffer(bufferKey);
+      }, captureBatchWindowMs);
+      captureTimers.set(bufferKey, timer);
+    };
 
     if (cfg.autoRecall) {
       api.on("before_agent_start", async (event, ctx) => {
@@ -626,31 +807,35 @@ const memoryPlugin = {
         const sessionId = (ctx as any)?.sessionKey;
         if (sessionId) currentSessionId = sessionId;
 
-        const validMsgs = event.messages.filter((m: any) => 
-          (m.role === "user" || m.role === "assistant") && typeof m.content === "string"
-        ).slice(-10);
+        // Helper to extract text from message content (string or array)
+        const extractText = (content: any): string => {
+          if (typeof content === "string") return content;
+          if (Array.isArray(content)) {
+            return content
+              .filter((c: any) => c.type === "text")
+              .map((c: any) => c.text || "")
+              .join("\n");
+          }
+          return "";
+        };
+
+        const validMsgs = event.messages.filter((m: any) => {
+          if (m.role !== "user" && m.role !== "assistant") return false;
+          const text = extractText(m.content);
+          return text.trim().length > 0;
+        }).map((m: any) => ({
+          role: m.role,
+          content: extractText(m.content)
+        })).slice(-10);
 
         if (!validMsgs.length) {
           api.logger.debug?.(`[mem0] 没有有效的文本消息，跳过捕获`);
           return;
         }
-
-        // ⚡️ Async Fire-and-Forget: Don't block the gateway response
-        // 异步后台执行：不阻塞 Gateway 响应
-        (async () => {
-          try {
-            const res = await provider.add(validMsgs as any, buildAddOptions(undefined, currentSessionId));
-            if (res.results.length > 0) {
-              api.logger.info(`[mem0] ✨ 已捕获 ${res.results.length} 条新记忆 (后台处理中)`);
-              const memories = await provider.search(validMsgs.map((m: any) => m.content).join(" "), buildSearchOptions());
-              reflectionEngine.reflect(validMsgs as any, memories);
-            } else {
-              api.logger.debug?.(`[mem0] LLM 未提取到新记忆 (认为信息量不足)`);
-            }
-          } catch (err) {
-            api.logger.warn(`[mem0] 记忆捕获失败: ${err}`);
-          }
-        })();
+        scheduleCaptureBatch(
+          currentSessionId,
+          validMsgs.map((m: any) => ({ role: m.role as "user" | "assistant", content: m.content }))
+        );
       });
     }
 
@@ -671,7 +856,7 @@ const memoryPlugin = {
             autoRecall: cfg.autoRecall,
             maxMemoryCount: cfg.maxMemoryCount,
           },
-          version: "0.5.7",
+          version: PLUGIN_VERSION,
         };
         
         fs.writeFileSync(statusPath, JSON.stringify(status, null, 2));
@@ -692,7 +877,10 @@ const memoryPlugin = {
         // Prune old memories if needed
         provider.prune(cfg.userId, cfg.maxMemoryCount || 2000)
           .then((deleted) => {
-            if (deleted > 0) api.logger.info(`[mem0] 🧹 已清理 ${deleted} 条旧记忆 (限制: ${cfg.maxMemoryCount})`);
+            if (deleted > 0) {
+              clearSearchCache();
+              api.logger.info(`[mem0] 🧹 已清理 ${deleted} 条旧记忆 (限制: ${cfg.maxMemoryCount})`);
+            }
           })
           .catch((err) => api.logger.warn(`[mem0] 清理失败: ${err}`));
 
@@ -708,6 +896,14 @@ const memoryPlugin = {
       stop: () => {
         memoryIngestor.stop();
         clearInterval(heartbeat);
+        const pendingCaptureKeys = Array.from(captureTimers.keys());
+        pendingCaptureKeys.forEach((key) => {
+          void flushCaptureBuffer(key);
+        });
+        const remainingKeys = Array.from(captureBuffers.keys());
+        remainingKeys.forEach((key) => {
+          void flushCaptureBuffer(key);
+        });
         // Final status update on shutdown
         updateStatusFile().catch(() => {});
       }

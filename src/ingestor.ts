@@ -6,7 +6,7 @@ import { type Mem0Provider } from "./types.js";
 
 export class MemoryIngestor {
   private watchers: fs.FSWatcher[] = [];
-  private processedFiles = new Set<string>();
+  private processedFiles = new Map<string, string>();
   private debounceTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
@@ -52,6 +52,7 @@ export class MemoryIngestor {
   stop() {
     this.watchers.forEach(w => w.close());
     this.watchers = [];
+    this.processedFiles.clear();
   }
 
   private handleFileChange(filePath: string) {
@@ -73,6 +74,10 @@ export class MemoryIngestor {
       if (!fs.existsSync(filePath)) return;
 
       const stats = fs.statSync(filePath);
+      const fingerprint = `${stats.size}:${Math.floor(stats.mtimeMs)}`;
+      if (this.processedFiles.get(filePath) === fingerprint) {
+        return;
+      }
       // Ignore files older than 1 minute (avoid re-ingesting old files on startup if we were to scan them)
       // But for watcher events, they are fresh.
       
@@ -104,6 +109,8 @@ ${content}
       } else {
         this.logger.debug?.(`[mem0] 文件摄入完成，但未提取到新记忆 (可能已存在)`);
       }
+
+      this.processedFiles.set(filePath, fingerprint);
 
     } catch (err) {
       this.logger.warn(`[mem0] Error ingesting file ${filePath}: ${err}`);

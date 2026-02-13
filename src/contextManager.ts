@@ -56,6 +56,10 @@ export interface InjectionResult {
   summarized?: boolean;
 }
 
+function getMemoryText(mem: MemoryItem): string {
+  return typeof mem.memory === "string" ? mem.memory : "";
+}
+
 // Smart context injection with token budget management
 export function buildMemoryContext(
   memories: MemoryItem[],
@@ -102,7 +106,10 @@ export function buildMemoryContext(
   for (const mem of sorted) {
     if (selectedMemories.length >= maxMemories) break;
     
-    const memTokens = estimateTokens(mem.memory) + 10; // +10 for bullet point
+    const memoryText = getMemoryText(mem);
+    if (!memoryText.trim()) continue;
+
+    const memTokens = estimateTokens(memoryText) + 10; // +10 for bullet point
     if (currentTokens + memTokens <= budget) {
       selectedMemories.push(mem);
       currentTokens += memTokens;
@@ -144,11 +151,12 @@ function findModelLimit(modelId: string): number {
 
 function truncateMemory(mem: MemoryItem, maxTokens: number): MemoryItem {
   const maxChars = maxTokens * 2; // Conservative char estimate
-  if (mem.memory.length <= maxChars) return mem;
+  const memoryText = getMemoryText(mem);
+  if (memoryText.length <= maxChars) return { ...mem, memory: memoryText };
   
   return {
     ...mem,
-    memory: mem.memory.substring(0, maxChars - 3) + "...",
+    memory: memoryText.substring(0, maxChars - 3) + "...",
   };
 }
 
@@ -156,9 +164,11 @@ function buildContextString(memories: MemoryItem[]): string {
   if (memories.length === 0) return "";
   
   const lines = memories.map((m, i) => {
+    const memoryText = getMemoryText(m);
+    if (!memoryText.trim()) return `${i + 1}. (empty memory skipped)`;
     const score = m.score ? ` [${(m.score * 100).toFixed(0)}%]` : "";
     const source = (m as any)._source === "archive" ? " [ARCHIVE]" : "";
-    return `${i + 1}. ${m.memory}${score}${source}`;
+    return `${i + 1}. ${memoryText}${score}${source}`;
   });
   
   return `<relevant-memories>\n${lines.join("\n")}\n</relevant-memories>`;
@@ -173,11 +183,14 @@ export function summarizeMemories(memories: MemoryItem[], targetTokens: number):
   let currentTokens = MEMORY_OVERHEAD;
   
   for (const mem of memories) {
-    const firstSentence = mem.memory.split(/[。.!?\n]/)[0];
+    const memoryText = getMemoryText(mem);
+    if (!memoryText.trim()) continue;
+
+    const firstSentence = memoryText.split(/[。.!?\n]/)[0];
     const tokens = estimateTokens(firstSentence) + 5;
     
     if (currentTokens + tokens <= targetTokens) {
-      phrases.push(firstSentence + (firstSentence !== mem.memory ? "..." : ""));
+      phrases.push(firstSentence + (firstSentence !== memoryText ? "..." : ""));
       currentTokens += tokens;
     }
   }

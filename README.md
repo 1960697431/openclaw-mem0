@@ -5,7 +5,7 @@
 基于 Mem0 构建的下一代智能记忆系统，专为 OpenClaw 设计。
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.5.0-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.6.0-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/OpenClaw-2026.2+-green.svg" alt="OpenClaw" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-orange.svg" alt="License" />
 </p>
@@ -159,6 +159,13 @@ cat ~/.openclaw/data/mem0/mem0-status.json
 ---
 
 ## 🔄 版本历史
+
+### v0.6.0 (重大性能与兼容性更新)
+- 🆕 **多格式远端 Embedding**: 支持 Gemini、Ollama、OpenAI 等多种远端向量模型，不再局限于本地运行。
+- 🆕 **速度大幅提升**: 搜索请求并行化处理，增加搜索结果 LRU 缓存，对话捕获改为异步批处理。
+- 🆕 **国产模型深度适配**: 增强了对 DeepSeek、Kimi、智谱、MiniMax、通义千问等国产模型的思考模式（Thinking/Reasoning）识别与过滤。
+- 🆕 **反思引擎重构**: `ReflectionEngine` 现在复用统一 LLM 适配层，支持所有已配置的提供商。
+- 🐛 **稳定性修复**: 补齐了自动更新漏掉的核心文件，修复了 SQLite 并发初始化锁竞争问题。
 
 ### v0.5.0 (通用模型支持)
 - 🆕 **Universal LLM Support**: 支持所有 OpenAI 兼容的 LLM 提供商

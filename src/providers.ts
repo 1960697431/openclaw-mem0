@@ -1,8 +1,9 @@
 
 import { type OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { type Mem0Config, type Mem0Provider, type AddOptions, type AddResult, type SearchOptions, type MemoryItem, type ListOptions, type Mem0Stats } from "./types.js";
-import { TransformersJsEmbedder } from "./embedder.js";
+import { TransformersJsEmbedder, RemoteEmbedder, isRemoteEmbedderProvider, normalizeRemoteEmbedderConfig } from "./embedder.js";
 import { JsonCleaningLLM } from "./utils.js";
+import { UnifiedLLM, createLLM } from "./llm.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -13,6 +14,7 @@ class WriteQueue {
   private queue: Array<() => Promise<any>> = [];
   private processing = false;
   private stats = { totalWrites: 0, queueMax: 0 };
+  private readonly writeDelayMs = Math.max(0, Number(process.env.MEM0_WRITE_DELAY_MS ?? 0) || 0);
 
   async enqueue<T>(fn: () => Promise<T>): Promise<T> {
     return new Promise((resolve, reject) => {
@@ -41,8 +43,10 @@ class WriteQueue {
       } catch {
         // Error already handled in the task wrapper
       }
-      // Small delay between writes to reduce SQLite lock contention
-      await new Promise(r => setTimeout(r, 10));
+      if (this.writeDelayMs > 0) {
+        // Optional delay for conservative environments. Default is 0 for throughput.
+        await new Promise(r => setTimeout(r, this.writeDelayMs));
+      }
     }
     
     this.processing = false;
@@ -55,6 +59,120 @@ class WriteQueue {
 
 // Shared write queue for all OSS operations
 const writeQueue = new WriteQueue();
+
+// Serialize temporary process.cwd() switches during Memory initialization.
+let cwdSwitchChain: Promise<void> = Promise.resolve();
+
+async function withCwdSwitchLock<T>(fn: () => Promise<T>): Promise<T> {
+  let release: (() => void) | null = null;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const previous = cwdSwitchChain;
+  cwdSwitchChain = previous.then(() => gate);
+
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release?.();
+  }
+}
+
+function countLinesFast(filePath: string): number {
+  const fd = fs.openSync(filePath, "r");
+  const buffer = Buffer.alloc(64 * 1024);
+  let bytesRead = 0;
+  let lineCount = 0;
+  let lastByte = -1;
+
+  try {
+    do {
+      bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      for (let i = 0; i < bytesRead; i++) {
+        if (buffer[i] === 10) lineCount++; // '\n'
+      }
+      if (bytesRead > 0) {
+        lastByte = buffer[bytesRead - 1];
+      }
+    } while (bytesRead > 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+
+  // Handle non-empty file without trailing newline.
+  if (lastByte !== -1 && lastByte !== 10) {
+    lineCount += 1;
+  }
+  return lineCount;
+}
+
+// ============================================================================
+// UnifiedLLM Adapter - Wraps UnifiedLLM to match mem0ai/oss LLM interface
+// ============================================================================
+class UnifiedLLMAdapter {
+  private unifiedLLM: UnifiedLLM;
+  private logger: OpenClawPluginApi["logger"];
+  private config: any;
+
+  constructor(unifiedLLM: UnifiedLLM, logger: OpenClawPluginApi["logger"], config: any) {
+    this.unifiedLLM = unifiedLLM;
+    this.logger = logger;
+    this.config = config;
+  }
+
+  private normalizeMessages(messages: Array<{ role: string; content: string }>): Array<{ role: "system" | "user" | "assistant"; content: string }> {
+    return messages.map((message) => {
+      const role = message.role === "system" || message.role === "assistant" || message.role === "user"
+        ? message.role
+        : "user";
+      const content = typeof message.content === "string" ? message.content : String(message.content ?? "");
+      return { role, content };
+    });
+  }
+
+  async generate(
+    messages: Array<{ role: string; content: string }>,
+    options?: { responseFormat?: { type: string }; temperature?: number }
+  ): Promise<string> {
+    try {
+      const result = await this.unifiedLLM.generate(this.normalizeMessages(messages), {
+        jsonMode: options?.responseFormat?.type === "json_object",
+        temperature: options?.temperature,
+      });
+      return result;
+    } catch (error: any) {
+      this.logger.error(`[mem0] UnifiedLLM generation failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Provide backward compatibility with JsonCleaningLLM behavior
+  async chat(messages: Array<{ role: string; content: string }>, options?: any): Promise<any> {
+    const content = await this.generate(messages, options);
+    return {
+      choices: [{
+        message: {
+          role: "assistant",
+          content: content,
+        },
+      }],
+    };
+  }
+
+  async generateChat(messages: Array<{ role: string; content: string }>): Promise<{ content: string; role: string }> {
+    const content = await this.generate(messages);
+    return {
+      role: "assistant",
+      content,
+    };
+  }
+
+  // mem0ai/oss compatibility - it calls this.llm.generateResponse()
+  async generateResponse(messages: Array<{ role: string; content: string }>, options?: any): Promise<string> {
+    return this.generate(messages, options);
+  }
+}
 
 // Helper to archive memories before deletion
 function archiveMemories(memories: MemoryItem[], baseDir: string, logger: any) {
@@ -84,6 +202,7 @@ export class PlatformProvider implements Mem0Provider {
     private readonly apiKey: string,
     private readonly orgId: string | undefined,
     private readonly projectId: string | undefined,
+    private readonly statsUserId: string,
     private readonly logger: OpenClawPluginApi["logger"],
     private readonly baseDir: string,
   ) { }
@@ -185,7 +304,7 @@ export class PlatformProvider implements Mem0Provider {
     
     let totalMemories = 0;
     try {
-      const memories = await this.getAll({ user_id: "default" });
+      const memories = await this.getAll({ user_id: this.statsUserId });
       totalMemories = memories.length;
     } catch {}
 
@@ -244,6 +363,15 @@ export class PlatformProvider implements Mem0Provider {
         })),
       };
     }
+    if (raw && typeof raw === "object" && (raw.id || raw.memory_id || raw.memory || raw.text)) {
+      return {
+        results: [{
+          id: raw.id ?? raw.memory_id ?? "",
+          memory: raw.memory ?? raw.text ?? "",
+          event: raw.event ?? raw.metadata?.event ?? "ADD",
+        }],
+      };
+    }
     return { results: [] };
   }
 }
@@ -254,11 +382,13 @@ export class PlatformProvider implements Mem0Provider {
 export class OSSProvider implements Mem0Provider {
   private memory: any;
   private initPromise: Promise<void> | null = null;
+  private archiveLineCountCache: { mtimeMs: number; size: number; lineCount: number } | null = null;
 
   constructor(
     private readonly ossConfig: Mem0Config["oss"],
     private readonly customPrompt: string | undefined,
     private readonly resolvePath: (p: string) => string,
+    private readonly statsUserId: string,
     private readonly logger: OpenClawPluginApi["logger"],
     private readonly baseDir: string,
   ) { }
@@ -278,25 +408,32 @@ export class OSSProvider implements Mem0Provider {
 
     const mem0Oss = await import("mem0ai/oss");
     const { Memory, EmbedderFactory, LLMFactory } = mem0Oss;
+    const self = this;
 
     // Patch Embedder
     const originalEmbedderCreate = EmbedderFactory.create.bind(EmbedderFactory);
     EmbedderFactory.create = (provider: string, config: any) => {
-      if (provider.toLowerCase() === "transformersjs") {
+      const providerLower = (provider || "").toLowerCase();
+      if (providerLower === "transformersjs") {
         return new TransformersJsEmbedder(config);
+      }
+      if (isRemoteEmbedderProvider(providerLower)) {
+        const normalized = normalizeRemoteEmbedderConfig(providerLower, config || {});
+        self.logger?.info(`[mem0] Embedder Init: ${providerLower} (${normalized.model || "auto"})`);
+        return new RemoteEmbedder(normalized);
       }
       return originalEmbedderCreate(provider, config);
     };
 
-    // Patch LLM
-    const originalLLMCreate = LLMFactory.create.bind(LLMFactory);
-    const self = this;
+    // Patch LLM with UnifiedLLM for multi-format support
     LLMFactory.create = (provider: string, config: any) => {
       self.logger?.info(`[mem0] LLM Init: ${provider} (${config?.model})`);
-      const llm = originalLLMCreate(provider, config);
-
-      // Pass both llm and config to JsonCleaningLLM for provider detection
-      return new JsonCleaningLLM(llm, self.logger, config);
+      
+      // Create UnifiedLLM for multi-format API support
+      const unifiedLLM = createLLM({ provider, config }, self.logger);
+      
+      // Return adapter that wraps UnifiedLLM to match mem0ai/oss interface
+      return new UnifiedLLMAdapter(unifiedLLM, self.logger, config);
     };
 
     const config: Record<string, unknown> = { version: "v1.1" };
@@ -306,11 +443,48 @@ export class OSSProvider implements Mem0Provider {
       fs.mkdirSync(this.baseDir, { recursive: true });
     }
     
-    // Auto-configure dims for Qwen3
-    const isTransformer = this.ossConfig?.embedder?.provider?.toLowerCase() === "transformersjs";
-    const embedderDims = this.ossConfig?.embedder?.config?.embeddingDims ?? (isTransformer ? 1024 : undefined);
+    // Auto-configure embedder dimensions and normalize remote embedder config.
+    let embedderDims: number | undefined;
 
-    if (this.ossConfig?.embedder) config.embedder = this.ossConfig.embedder;
+    if (this.ossConfig?.embedder) {
+      const embedder = JSON.parse(JSON.stringify(this.ossConfig.embedder));
+      const embedderProvider = (embedder?.provider || "").toLowerCase();
+      if (embedderProvider === "transformersjs") {
+        if (!embedder.config?.embeddingDims) {
+          embedder.config = embedder.config || {};
+          embedder.config.embeddingDims = 1024;
+        }
+        embedderDims = Number(embedder.config.embeddingDims) || 1024;
+      } else if (isRemoteEmbedderProvider(embedderProvider)) {
+        embedder.config = embedder.config || {};
+        const llmConfig = (this.ossConfig?.llm?.config || {}) as Record<string, any>;
+        if (!embedder.config.apiKey && llmConfig.apiKey) {
+          embedder.config.apiKey = llmConfig.apiKey;
+        }
+        if (!embedder.config.headers && llmConfig.headers) {
+          embedder.config.headers = llmConfig.headers;
+        }
+        if (!embedder.config.timeout && llmConfig.timeout) {
+          embedder.config.timeout = llmConfig.timeout;
+        }
+        if (
+          !embedder.config.baseURL &&
+          !embedder.config.url &&
+          llmConfig.baseURL &&
+          embedderProvider !== "gemini" &&
+          embedderProvider !== "google" &&
+          embedderProvider !== "ollama"
+        ) {
+          embedder.config.baseURL = llmConfig.baseURL;
+        }
+        const normalizedEmbedderConfig = normalizeRemoteEmbedderConfig(embedderProvider, embedder.config);
+        embedder.config = normalizedEmbedderConfig;
+        embedderDims = Number(normalizedEmbedderConfig.embeddingDims) || 1024;
+      } else {
+        embedderDims = Number(embedder.config?.embeddingDims) || undefined;
+      }
+      config.embedder = embedder;
+    }
 
     // Vector Store config - use "memory" provider (which still uses SQLite internally)
     // Valid providers: memory, qdrant, redis, supabase, vectorize, azure-ai-search
@@ -320,6 +494,12 @@ export class OSSProvider implements Mem0Provider {
       if (!validProviders.includes((vectorStore.provider || '').toLowerCase())) {
         this.logger?.warn(`[mem0] Invalid vectorStore provider '${vectorStore.provider}', using 'memory'`);
         vectorStore.provider = 'memory';
+      }
+      if (vectorStore.config?.dbPath && typeof vectorStore.config.dbPath === "string") {
+        vectorStore.config.dbPath = this.resolvePath(vectorStore.config.dbPath);
+      }
+      if (vectorStore.config?.path && typeof vectorStore.config.path === "string") {
+        vectorStore.config.path = this.resolvePath(vectorStore.config.path);
       }
       if (!vectorStore.config?.dimension && embedderDims) {
         vectorStore.config = vectorStore.config || {};
@@ -350,16 +530,18 @@ export class OSSProvider implements Mem0Provider {
       fs.closeSync(fs.openSync(vectorDbPath, 'a'));
     } catch {}
     
-    try {
-      process.chdir(this.baseDir);
-      this.memory = new Memory(config);
-    } catch (err: any) {
-      this.logger?.error(`[mem0] Memory init failed: ${err.message}`);
-      throw err;
-    } finally {
-      // Restore original CWD
-      try { process.chdir(originalCwd); } catch {}
-    }
+    await withCwdSwitchLock(async () => {
+      try {
+        process.chdir(this.baseDir);
+        this.memory = new Memory(config);
+      } catch (err: any) {
+        this.logger?.error(`[mem0] Memory init failed: ${err.message}`);
+        throw err;
+      } finally {
+        // Restore original CWD
+        try { process.chdir(originalCwd); } catch {}
+      }
+    });
   }
 
   // Adapter methods mapping unified interface to OSS SDK (camelCase)
@@ -434,7 +616,7 @@ export class OSSProvider implements Mem0Provider {
     // Get memory count
     let totalMemories = 0;
     try {
-      const memories = await this.getAll({ user_id: "default" });
+      const memories = await this.getAll({ user_id: this.statsUserId });
       totalMemories = memories.length;
     } catch {}
 
@@ -452,10 +634,23 @@ export class OSSProvider implements Mem0Provider {
     try {
       const archivePath = path.join(this.baseDir, "mem0-archive.jsonl");
       if (fs.existsSync(archivePath)) {
-        archiveSize = fs.statSync(archivePath).size;
-        // Estimate archived memory count (rough)
-        const content = fs.readFileSync(archivePath, "utf-8");
-        const lineCount = content.split("\n").filter((l: string) => l.trim()).length;
+        const stat = fs.statSync(archivePath);
+        archiveSize = stat.size;
+        let lineCount = 0;
+        if (
+          this.archiveLineCountCache &&
+          this.archiveLineCountCache.mtimeMs === stat.mtimeMs &&
+          this.archiveLineCountCache.size === stat.size
+        ) {
+          lineCount = this.archiveLineCountCache.lineCount;
+        } else {
+          lineCount = countLinesFast(archivePath);
+          this.archiveLineCountCache = {
+            mtimeMs: stat.mtimeMs,
+            size: stat.size,
+            lineCount,
+          };
+        }
         totalMemories += lineCount;
       }
     } catch {}
@@ -500,6 +695,24 @@ export class OSSProvider implements Mem0Provider {
         })),
       };
     }
+    if (Array.isArray(raw)) {
+      return {
+        results: raw.map((r: any) => ({
+          id: r.id ?? r.memory_id ?? "",
+          memory: r.memory ?? r.text ?? "",
+          event: r.event ?? r.metadata?.event ?? "ADD",
+        })),
+      };
+    }
+    if (raw && typeof raw === "object" && (raw.id || raw.memory_id || raw.memory || raw.text)) {
+      return {
+        results: [{
+          id: raw.id ?? raw.memory_id ?? "",
+          memory: raw.memory ?? raw.text ?? "",
+          event: raw.event ?? raw.metadata?.event ?? "ADD",
+        }],
+      };
+    }
     return { results: [] };
   }
 }
@@ -522,9 +735,10 @@ export function createProvider(cfg: Mem0Config, api: OpenClawPluginApi, dataDir:
         if (path.isAbsolute(p)) return p;
         return path.join(dataDir, p);
       },
+      cfg.userId,
       api.logger,
       dataDir
     );
   }
-  return new PlatformProvider(cfg.apiKey!, cfg.orgId, cfg.projectId, api.logger, dataDir);
+  return new PlatformProvider(cfg.apiKey!, cfg.orgId, cfg.projectId, cfg.userId, api.logger, dataDir);
 }

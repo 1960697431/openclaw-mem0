@@ -4,10 +4,12 @@ import * as path from "node:path";
 import { type PendingAction } from "./types.js";
 import { REFLECTION_PROMPT } from "./constants.js";
 import { cleanJsonResponse } from "./utils.js";
+import { createLLM, type UnifiedLLM } from "./llm.js";
 import { type OpenClawPluginApi } from "openclaw/plugin-sdk";
 
 export class ReflectionEngine {
   private pendingActions: PendingAction[] = [];
+  private llmClient: UnifiedLLM | null = null;
   private readonly MAX_PENDING = 20; // Increased limit
   private readonly ACTION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days (longer memory)
   private readonly DB_FILE = "mem0-actions.json";
@@ -47,6 +49,13 @@ export class ReflectionEngine {
     }
   }
 
+  private getLLM(): UnifiedLLM | null {
+    if (!this.llmConfig) return null;
+    if (this.llmClient) return this.llmClient;
+    this.llmClient = createLLM(this.llmConfig, this.logger);
+    return this.llmClient;
+  }
+
   async reflect(
     recentMessages: Array<{ role: string; content: string }>,
     recentMemories: Array<{ memory: string }>,
@@ -64,69 +73,39 @@ export class ReflectionEngine {
         : "(no stored memories yet)";
 
       const userPrompt = `Recent conversation:\n${conversationSummary}\n\nStored memories:\n${memorySummary}`;
-      
-      const llmCfg = this.llmConfig.config;
-      const provider = this.llmConfig.provider?.toLowerCase() ?? "openai";
-      const model = (llmCfg.model as string) || "gpt-4o";
+      const llm = this.getLLM();
+      if (!llm) return;
 
-      let responseText = "";
-
-      // Call LLM (Ollama or OpenAI-compatible)
-      if (provider === "ollama") {
-        const ollamaUrl = (llmCfg.url as string) || "http://127.0.0.1:11434";
-        const response = await fetch(`${ollamaUrl}/api/chat`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: REFLECTION_PROMPT },
-              { role: "user", content: userPrompt },
-            ],
-            stream: false,
-            options: { temperature: 0.3 },
-          }),
-          signal: AbortSignal.timeout(30_000),
-        });
-        if (!response.ok) return;
-        const data = (await response.json()) as any;
-        responseText = data?.message?.content ?? "";
-      } else {
-        const baseURL = (llmCfg.baseURL as string) || "https://api.openai.com/v1";
-        const apiKey = (llmCfg.apiKey as string) || "";
-        const response = await fetch(`${baseURL}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: "system", content: REFLECTION_PROMPT },
-              { role: "user", content: userPrompt },
-            ],
-            temperature: 0.3,
-            max_tokens: 200,
-            response_format: { type: "json_object" } // Try to enforce JSON
-          }),
-          signal: AbortSignal.timeout(30_000),
-        });
-        if (!response.ok) return;
-        const data = (await response.json()) as any;
-        responseText = data?.choices?.[0]?.message?.content ?? "";
-      }
+      const responseText = await llm.generate(
+        [
+          { role: "system", content: REFLECTION_PROMPT },
+          { role: "user", content: userPrompt },
+        ],
+        { jsonMode: true, temperature: 0.3, maxTokens: 200 }
+      );
+      if (!responseText) return;
 
       const content = cleanJsonResponse(responseText);
-      const result = JSON.parse(content);
+      let result: any;
+      try {
+        result = JSON.parse(content);
+      } catch {
+        this.logger.debug?.(`[mem0] Reflection returned non-JSON content: ${content.slice(0, 160)}`);
+        return;
+      }
 
-      if (result.should_act && result.message) {
-        const delayMs = (result.delay_minutes || 0) * 60 * 1000;
+      if (!result || typeof result !== "object") return;
+      const shouldAct = Boolean(result.should_act);
+      const message = typeof result.message === "string" ? result.message.trim() : "";
+      const delayMinutes = typeof result.delay_minutes === "number" ? Math.max(0, result.delay_minutes) : 0;
+
+      if (shouldAct && message) {
+        const delayMs = delayMinutes * 60 * 1000;
         const now = Date.now();
 
         const action: PendingAction = {
           id: `action_${now}_${Math.random().toString(36).slice(2, 8)}`,
-          message: result.message,
+          message,
           createdAt: now,
           triggerAt: now + delayMs,
           fired: false,
@@ -134,7 +113,7 @@ export class ReflectionEngine {
 
         this.pendingActions.push(action);
         this.saveActions(); // Persist immediately
-        this.logger.info(`[mem0] Intent detected: "${action.message}" (trigger in ${result.delay_minutes}m)`);
+        this.logger.info(`[mem0] Intent detected: "${action.message}" (trigger in ${delayMinutes}m)`);
       }
     } catch (err) {
       this.logger.debug?.(`[mem0] Reflection error: ${err}`);

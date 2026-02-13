@@ -20,5 +20,13 @@ dist/
 # Local model cache (downloaded from GitHub Releases at runtime)
 models/
 
+# Database files
+*.db
+*.db-shm
+*.db-wal
+mem0-archive.jsonl
+mem0-actions.json
+mem0-status.json
+
 # Lock files (optional - some prefer to commit these)
 # package-lock.json
