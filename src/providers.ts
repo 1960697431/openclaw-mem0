@@ -134,16 +134,24 @@ class UnifiedLLMAdapter {
   private ensureJsonObjectResponse(raw: string): string {
     const cleaned = cleanJsonResponse(raw || "").trim();
     if (!cleaned) {
-      this.logger.warn("[mem0] LLM returned empty JSON-mode response, falling back to {}");
+      this.logger.debug?.("[mem0] LLM returned empty JSON-mode response, falling back to {}");
       return "{}";
     }
     try {
       JSON.parse(cleaned);
       return cleaned;
     } catch {
-      this.logger.warn(`[mem0] LLM returned invalid JSON-mode response, fallback to {}. preview=${cleaned.slice(0, 120)}`);
+      this.logger.debug?.(`[mem0] LLM returned invalid JSON-mode response, fallback to {}. preview=${cleaned.slice(0, 120)}`);
       return "{}";
     }
+  }
+
+  private isJsonModeRequest(options: any): boolean {
+    // mem0ai/oss uses { type: "json_object" } directly.
+    if (options?.type === "json_object") return true;
+    // Some wrappers pass { responseFormat: { type: "json_object" } }.
+    if (options?.responseFormat?.type === "json_object") return true;
+    return false;
   }
 
   async generate(
@@ -151,7 +159,7 @@ class UnifiedLLMAdapter {
     options?: { responseFormat?: { type: string }; temperature?: number }
   ): Promise<string> {
     try {
-      const jsonMode = options?.responseFormat?.type === "json_object";
+      const jsonMode = this.isJsonModeRequest(options);
       const result = await this.unifiedLLM.generate(this.normalizeMessages(messages), {
         jsonMode,
         temperature: options?.temperature,

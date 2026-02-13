@@ -307,11 +307,16 @@ const memoryPlugin = {
         if (oldestKey) searchCache.delete(oldestKey);
       }
     };
+    const previewMemoryText = (text: string, maxLen = 160): string => {
+      const normalized = (text || "").replace(/\s+/g, " ").trim();
+      if (!normalized) return "(empty)";
+      return normalized.length > maxLen ? `${normalized.slice(0, maxLen - 1)}…` : normalized;
+    };
     const formatSearchResult = (results: MemoryItem[]) => {
       const text = results.map((r, i) => {
         const score = r.score ? ` (score: ${(r.score * 100).toFixed(0)}%)` : "";
         const source = (r as any)._source === "archive" ? " [ARCHIVE]" : "";
-        return `${i + 1}. ${r.memory}${score}${source}`;
+        return `${i + 1}. [id:${r.id}] ${previewMemoryText(r.memory)}${score}${source}`;
       }).join("\n");
       return {
         content: [{ type: "text", text: `Found ${results.length} memories:\n${text}` }],
@@ -507,10 +512,12 @@ const memoryPlugin = {
       parameters: Type.Object({
         userId: Type.Optional(Type.String()),
         scope: Type.Optional(Type.Union([Type.Literal("session"), Type.Literal("long-term"), Type.Literal("all")])),
+        limit: Type.Optional(Type.Number()),
       }),
       async execute(_id, params: any) {
-        const { userId, scope = "all" } = params;
+        const { userId, scope = "all", limit = 30 } = params;
         const uid = userId || cfg.userId;
+        const displayLimit = Math.max(1, Math.min(100, Number(limit) || 30));
         try {
           let memories: MemoryItem[] = [];
           const needLongTerm = scope === "long-term" || scope === "all";
@@ -539,9 +546,30 @@ const memoryPlugin = {
             pushUnique(sessionMemories);
           }
 
+          if (memories.length === 0) {
+            return {
+              content: [{ type: "text", text: "No memories found." }],
+              details: { count: 0, memories: [] }
+            };
+          }
+
+          const sortedMemories = memories.slice().sort((a, b) => {
+            const ta = new Date(a.updated_at || a.created_at || 0).getTime();
+            const tb = new Date(b.updated_at || b.created_at || 0).getTime();
+            return tb - ta;
+          });
+          const shown = sortedMemories.slice(0, displayLimit);
+          const lines = shown.map((m, i) => `${i + 1}. [id:${m.id}] ${previewMemoryText(m.memory)}`);
+          const suffix = sortedMemories.length > shown.length
+            ? `\n... and ${sortedMemories.length - shown.length} more.`
+            : "";
+
           return {
-            content: [{ type: "text", text: `${memories.length} memories found.` }],
-            details: { count: memories.length, memories }
+            content: [{
+              type: "text",
+              text: `${sortedMemories.length} memories found (scope=${scope}).\n${lines.join("\n")}${suffix}`
+            }],
+            details: { count: sortedMemories.length, memories: sortedMemories }
           };
         } catch (err) {
           return { content: [{ type: "text", text: `Error: ${err}` }] };
@@ -557,24 +585,85 @@ const memoryPlugin = {
       parameters: Type.Object({
         query: Type.Optional(Type.String()),
         memoryId: Type.Optional(Type.String()),
+        userId: Type.Optional(Type.String()),
+        scope: Type.Optional(Type.Union([Type.Literal("session"), Type.Literal("long-term"), Type.Literal("all")])),
+        limit: Type.Optional(Type.Number()),
+        deleteAll: Type.Optional(Type.Boolean()),
       }),
       async execute(_id, params: any) {
         try {
+          const effectiveUserId = params.userId || cfg.userId;
+          const scope = params.scope || "all";
+          const effectiveLimit = Math.max(1, Math.min(50, Number(params.limit) || 8));
+
           if (params.memoryId) {
             await provider.delete(params.memoryId);
             clearSearchCache();
             return { content: [{ type: "text", text: "Memory deleted." }] };
           }
           if (params.query) {
-            const results = await provider.search(params.query, buildSearchOptions(undefined, 5));
-            if (results.length === 1 || (results[0]?.score ?? 0) > 0.9) {
-              await provider.delete(results[0].id);
-              clearSearchCache();
-              return { content: [{ type: "text", text: `Deleted: ${results[0].memory}` }] };
+            const needLongTerm = scope === "long-term" || scope === "all";
+            const needSession = (scope === "session" || scope === "all") && Boolean(currentSessionId);
+            const [longTermResults, sessionResults] = await Promise.all([
+              needLongTerm ? provider.search(params.query, buildSearchOptions(effectiveUserId, effectiveLimit)) : Promise.resolve([] as MemoryItem[]),
+              needSession ? provider.search(params.query, buildSearchOptions(effectiveUserId, effectiveLimit, currentSessionId)) : Promise.resolve([] as MemoryItem[]),
+            ]);
+
+            const dedup = new Set<string>();
+            const results: MemoryItem[] = [];
+            for (const item of [...longTermResults, ...sessionResults]) {
+              if (!item || !item.id || dedup.has(item.id)) continue;
+              dedup.add(item.id);
+              results.push(item);
             }
+
+            if (results.length === 0) {
+              return { content: [{ type: "text", text: "No matching memories found." }] };
+            }
+
+            const normalizedQuery = String(params.query).trim().toLowerCase();
+            const exactMatches = results.filter((item) => String(item.memory || "").trim().toLowerCase() === normalizedQuery);
+            const candidates = exactMatches.length > 0 ? exactMatches : results;
+
+            if (params.deleteAll === true) {
+              const failed: string[] = [];
+              let deleted = 0;
+              for (const item of candidates) {
+                try {
+                  await provider.delete(item.id);
+                  deleted++;
+                } catch {
+                  failed.push(item.id);
+                }
+              }
+              if (deleted > 0) clearSearchCache();
+              const failedText = failed.length ? ` Failed IDs: ${failed.join(", ")}` : "";
+              return {
+                content: [{
+                  type: "text",
+                  text: `Deleted ${deleted}/${candidates.length} memories by query "${params.query}".${failedText}`
+                }],
+                details: { deleted, attempted: candidates.length, failedIds: failed, candidates }
+              };
+            }
+
+            if (candidates.length === 1) {
+              await provider.delete(candidates[0].id);
+              clearSearchCache();
+              return { content: [{ type: "text", text: `Deleted [id:${candidates[0].id}]: ${previewMemoryText(candidates[0].memory)}` }] };
+            }
+
+            const lines = candidates.slice(0, effectiveLimit).map((r, i) => {
+              const score = r.score != null ? ` score=${(r.score * 100).toFixed(0)}%` : "";
+              return `${i + 1}. [id:${r.id}] ${previewMemoryText(r.memory)}${score}`;
+            });
+
             return {
-              content: [{ type: "text", text: `Found ${results.length} candidates. Please specify ID.` }],
-              details: results
+              content: [{
+                type: "text",
+                text: `Found ${candidates.length} candidates for "${params.query}" (scope=${scope}).\n${lines.join("\n")}\nUse memory_forget with memoryId, or set deleteAll=true to remove all listed candidates.`
+              }],
+              details: { count: candidates.length, candidates }
             };
           }
           return { content: [{ type: "text", text: "Provide query or memoryId." }] };
