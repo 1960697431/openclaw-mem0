@@ -15,8 +15,10 @@
 ## ⚡ 30 秒极速安装
 
 ```bash
-curl -sL https://raw.githubusercontent.com/1960697431/openclaw-mem0/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/1960697431/openclaw-mem0/main/install.sh | bash
 ```
+
+安装脚本会自动检查 `curl`/`unzip`/`npm`，并在下载失败时自动重试。
 
 安装完成后重启 Gateway：
 ```bash

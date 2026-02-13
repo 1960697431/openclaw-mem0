@@ -7,6 +7,12 @@ REPO="1960697431/openclaw-mem0"
 BRANCH="main"
 INSTALL_DIR="$HOME/.openclaw/extensions/openclaw-mem0"
 TEMP_DIR=$(mktemp -d)
+ZIP_URL="https://github.com/$REPO/archive/refs/heads/$BRANCH.zip"
+
+cleanup() {
+    rm -rf "$TEMP_DIR"
+}
+trap cleanup EXIT
 
 # Colors
 GREEN='\033[0;32m'
@@ -18,25 +24,40 @@ echo -e "${BLUE}🧠 OpenClaw Mem0 Plugin Installer${NC}"
 echo "----------------------------------------"
 
 # 1. Check Pre-requisites
+if ! command -v curl &> /dev/null; then
+    echo -e "${YELLOW}❌ Error: curl is not installed.${NC}"
+    exit 1
+fi
+
+if ! command -v unzip &> /dev/null; then
+    echo -e "${YELLOW}❌ Error: unzip is not installed.${NC}"
+    exit 1
+fi
+
 if ! command -v npm &> /dev/null; then
     echo -e "${YELLOW}❌ Error: npm is not installed. Please install Node.js first.${NC}"
     exit 1
 fi
 
-# 2. Prepare Directory
+# 2. Download
+echo -e "${BLUE}⬇️  Downloading plugin from GitHub...${NC}"
+curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 \
+    "$ZIP_URL" -o "$TEMP_DIR/plugin.zip"
+
+# 3. Extract
+echo -e "${BLUE}📦 Extracting files...${NC}"
+unzip -q "$TEMP_DIR/plugin.zip" -d "$TEMP_DIR"
+EXTRACTED_DIR="$TEMP_DIR/openclaw-mem0-$BRANCH"
+if [ ! -d "$EXTRACTED_DIR" ]; then
+    echo -e "${YELLOW}❌ Error: extracted directory not found: $EXTRACTED_DIR${NC}"
+    exit 1
+fi
+
+# 4. Prepare Directory
 echo -e "${BLUE}📂 Preparing installation directory...${NC}"
 rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
-
-# 3. Download
-echo -e "${BLUE}⬇️  Downloading plugin from GitHub...${NC}"
-curl -L "https://github.com/$REPO/archive/refs/heads/$BRANCH.zip" -o "$TEMP_DIR/plugin.zip"
-
-# 4. Extract
-echo -e "${BLUE}📦 Extracting files...${NC}"
-unzip -q "$TEMP_DIR/plugin.zip" -d "$TEMP_DIR"
-# Move contents of the inner folder (e.g. openclaw-mem0-main) to install dir
-mv "$TEMP_DIR/openclaw-mem0-$BRANCH"/* "$INSTALL_DIR/"
+cp -R "$EXTRACTED_DIR"/. "$INSTALL_DIR"/
 
 # 5. Install Dependencies
 echo -e "${BLUE}🚀 Installing dependencies...${NC}"
@@ -98,7 +119,8 @@ else
 fi
 
 # 7. Cleanup
-rm -rf "$TEMP_DIR"
+trap - EXIT
+cleanup
 
 # 8. Success Message
 echo "----------------------------------------"
