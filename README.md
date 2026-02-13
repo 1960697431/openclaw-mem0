@@ -5,7 +5,7 @@
 基于 Mem0 构建的下一代智能记忆系统，专为 OpenClaw 设计。
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.6.0-blue.svg" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.6.2-blue.svg" alt="Version" />
   <img src="https://img.shields.io/badge/OpenClaw-2026.2+-green.svg" alt="OpenClaw" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-orange.svg" alt="License" />
 </p>
@@ -118,8 +118,8 @@ cat ~/.openclaw/data/mem0/mem0-status.json
 |:---|:---|:---|
 | `memory_search` | 搜索记忆 | `deep: true` 穿透冷库 |
 | `memory_store` | 存储记忆 | 自动去重、提取事实 |
-| `memory_list` | 列出记忆 | 按 Session/Long-term 筛选 |
-| `memory_forget` | 删除记忆 | 先归档再删除 |
+| `memory_list` | 列出记忆 | 显示 `id + 摘要`，支持 `limit` |
+| `memory_forget` | 删除记忆 | 支持 `query + deleteAll` 批量删除 |
 | `memory_stats` | 🆕 状态统计 | Token、存储、队列信息 |
 
 ---
@@ -178,9 +178,31 @@ cat ~/.openclaw/data/mem0/mem0-status.json
 - 插件已支持自动清理 `<think>`/`reasoning` 等思考内容，再做 JSON 解析。
 - 当模型在 JSON 模式下返回空内容或无效 JSON 时，会自动降级为 `{}`，避免 `Unexpected end of JSON input` 中断写入。
 
+### 自动捕捉调优（高级）
+
+如果你发现自动捕捉太“敏感”或太“保守”，可以用以下环境变量微调：
+
+| 变量名 | 说明 | 默认值 |
+|:---|:---|:---|
+| `MEM0_CAPTURE_BATCH_WINDOW_MS` | 批量窗口（毫秒） | `1200` |
+| `MEM0_CAPTURE_BATCH_MAX_MSGS` | 每次写入最多消息条数 | `16` |
+| `MEM0_CAPTURE_INPUT_MAX_MSGS` | 缓冲区保留的输入消息数 | `12` |
+| `MEM0_CAPTURE_MAX_CHARS_PER_MSG` | 单条消息最大字符 | `500` |
+| `MEM0_CAPTURE_MAX_TOTAL_CHARS` | 单批总字符预算 | `2600` |
+| `MEM0_CAPTURE_MIN_CHARS` | 过滤超短低价值消息阈值 | `6` |
+| `MEM0_CAPTURE_DUP_TTL_MS` | 重复批次去重 TTL（毫秒） | `600000` |
+| `MEM0_CAPTURE_DUP_MAX` | 重复指纹缓存上限 | `1024` |
+
+自动捕捉现在会优先过滤低信号回复、截断超长消息、跳过重复批次，并确保批次中至少包含用户消息，避免噪音写入。
+
 ---
 
 ## 🔄 版本历史
+
+### v0.6.2 (自动捕捉与可用性优化)
+- 🆕 **自动捕捉降噪**: 增加低信号消息过滤、超长内容预算裁剪、重复批次去重（TTL 指纹），减少无效写入。
+- 🆕 **删除体验增强**: `memory_list`/`memory_search` 直接展示 `id`，`memory_forget` 支持 `query + deleteAll` 批量删除。
+- 🐛 **稳定性改进**: 自动捕捉仅在含用户消息时触发，并过滤大段结构化噪音，降低 JSON 解析异常概率。
 
 ### v0.6.1 (兼容性热修复)
 - 🐛 修复部分模型在 `json_object` 模式下返回空内容导致 `Unexpected end of JSON input` 的问题（增加 JSON 兜底）。

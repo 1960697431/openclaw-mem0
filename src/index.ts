@@ -13,6 +13,7 @@ import { MemoryIngestor } from "./ingestor.js";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 function readPluginVersion(): string {
@@ -781,11 +782,127 @@ const memoryPlugin = {
     const archiveManager = new ArchiveManager(dataDir, api.logger);
     const memoryIngestor = new MemoryIngestor(workspaceDir, provider, api.logger, cfg.userId);
     const captureBatchWindowMs = Math.max(200, Number(process.env.MEM0_CAPTURE_BATCH_WINDOW_MS ?? 1200) || 1200);
-    const captureBatchMaxMessages = Math.max(10, Number(process.env.MEM0_CAPTURE_BATCH_MAX_MSGS ?? 30) || 30);
+    const captureBatchMaxMessages = Math.max(6, Number(process.env.MEM0_CAPTURE_BATCH_MAX_MSGS ?? 16) || 16);
+    const captureInputMaxMessages = Math.max(6, Number(process.env.MEM0_CAPTURE_INPUT_MAX_MSGS ?? 12) || 12);
+    const captureMaxCharsPerMessage = Math.max(120, Number(process.env.MEM0_CAPTURE_MAX_CHARS_PER_MSG ?? 500) || 500);
+    const captureMaxTotalChars = Math.max(600, Number(process.env.MEM0_CAPTURE_MAX_TOTAL_CHARS ?? 2600) || 2600);
+    const captureMinChars = Math.max(3, Number(process.env.MEM0_CAPTURE_MIN_CHARS ?? 6) || 6);
+    const captureDuplicateTtlMs = Math.max(60_000, Number(process.env.MEM0_CAPTURE_DUP_TTL_MS ?? 10 * 60_000) || 10 * 60_000);
+    const captureDuplicateMaxEntries = Math.max(128, Number(process.env.MEM0_CAPTURE_DUP_MAX ?? 1024) || 1024);
     const captureBuffers = new Map<string, { sessionId?: string; messages: Array<{ role: "user" | "assistant"; content: string }> }>();
     const captureTimers = new Map<string, NodeJS.Timeout>();
+    const recentCaptureFingerprints = new Map<string, number>();
 
     const getCaptureBufferKey = (sessionId?: string) => sessionId || "__global__";
+    const extractCaptureText = (content: any): string => {
+      if (typeof content === "string") return content;
+      if (Array.isArray(content)) {
+        return content
+          .filter((c: any) => c.type === "text")
+          .map((c: any) => c.text || "")
+          .join("\n");
+      }
+      return "";
+    };
+    const normalizeCaptureText = (raw: string): string => {
+      let text = (raw || "").trim();
+      if (!text) return "";
+      text = text
+        .replace(/```[\s\S]*?```/g, " [code] ")
+        .replace(/<think>[\s\S]*?<\/think>/gi, " ")
+        .replace(/<thinking>[\s\S]*?<\/thinking>/gi, " ")
+        .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!text) return "";
+      const lower = text.toLowerCase();
+      if (
+        text.length > captureMaxCharsPerMessage &&
+        (lower.includes("\"systempromptreport\"") || lower.includes("\"tools\"") || lower.includes("\"payloads\""))
+      ) {
+        return "";
+      }
+      if (/^\s*[\[{]/.test(text) && text.length > captureMaxCharsPerMessage) {
+        // Skip large structured dumps; they often cause bad fact extraction noise.
+        return "";
+      }
+      if (text.length > captureMaxCharsPerMessage) {
+        text = `${text.slice(0, captureMaxCharsPerMessage - 1)}…`;
+      }
+      return text;
+    };
+    const isLowSignalCaptureText = (text: string): boolean => {
+      const trimmed = (text || "").trim();
+      if (!trimmed) return true;
+      if (trimmed.length < captureMinChars) return true;
+      if (/^[\W_]+$/.test(trimmed)) return true;
+      if (/^(ok|okay|yes|no|thanks|thank you|好的|收到|明白|嗯嗯|行|好|已记录|记住了|搞定了)[\s!！。,.，]*$/i.test(trimmed)) {
+        return true;
+      }
+      return false;
+    };
+    const normalizeCaptureMessages = (
+      messages: Array<{ role: "user" | "assistant"; content: string }>
+    ): Array<{ role: "user" | "assistant"; content: string }> => {
+      const normalized: Array<{ role: "user" | "assistant"; content: string }> = [];
+      const dedup = new Set<string>();
+      for (const message of messages) {
+        if (message.role !== "user" && message.role !== "assistant") continue;
+        const content = normalizeCaptureText(message.content);
+        if (!content || isLowSignalCaptureText(content)) continue;
+        const key = `${message.role}:${content}`;
+        if (dedup.has(key)) continue;
+        dedup.add(key);
+        const previous = normalized[normalized.length - 1];
+        if (previous && previous.role === message.role && previous.content === content) continue;
+        normalized.push({ role: message.role, content });
+      }
+      return normalized;
+    };
+    const trimToCaptureBudget = (
+      messages: Array<{ role: "user" | "assistant"; content: string }>
+    ): Array<{ role: "user" | "assistant"; content: string }> => {
+      const selected: Array<{ role: "user" | "assistant"; content: string }> = [];
+      let totalChars = 0;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (!msg?.content) continue;
+        if (selected.length >= captureBatchMaxMessages) break;
+        const nextLen = msg.content.length;
+        if (selected.length > 0 && totalChars + nextLen > captureMaxTotalChars) continue;
+        selected.push(msg);
+        totalChars += nextLen;
+        if (totalChars >= captureMaxTotalChars) break;
+      }
+      return selected.reverse();
+    };
+    const isDuplicateCapturePayload = (
+      sessionId: string | undefined,
+      payload: Array<{ role: "user" | "assistant"; content: string }>
+    ): boolean => {
+      const now = Date.now();
+      for (const [key, expiresAt] of recentCaptureFingerprints) {
+        if (expiresAt <= now) recentCaptureFingerprints.delete(key);
+      }
+      const fingerprintBase = `${sessionId || "-"}\n${payload.map((m) => `${m.role}:${m.content}`).join("\n")}`;
+      const fingerprint = createHash("sha1").update(fingerprintBase).digest("hex");
+      const existing = recentCaptureFingerprints.get(fingerprint);
+      if (existing && existing > now) return true;
+      recentCaptureFingerprints.set(fingerprint, now + captureDuplicateTtlMs);
+
+      if (recentCaptureFingerprints.size > captureDuplicateMaxEntries) {
+        const overflow = recentCaptureFingerprints.size - captureDuplicateMaxEntries;
+        let removed = 0;
+        for (const key of recentCaptureFingerprints.keys()) {
+          recentCaptureFingerprints.delete(key);
+          removed++;
+          if (removed >= overflow) break;
+        }
+      }
+      return false;
+    };
+
     const flushCaptureBuffer = async (bufferKey: string) => {
       const timer = captureTimers.get(bufferKey);
       if (timer) {
@@ -797,23 +914,28 @@ const memoryPlugin = {
       if (!batch || !batch.messages.length) return;
       captureBuffers.delete(bufferKey);
 
-      const compactMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
-      for (const message of batch.messages) {
-        const text = typeof message.content === "string" ? message.content.trim() : "";
-        if (!text) continue;
-        const previous = compactMessages[compactMessages.length - 1];
-        if (previous && previous.role === message.role && previous.content === text) continue;
-        compactMessages.push({ role: message.role, content: text });
-      }
-      const payload = compactMessages.slice(-captureBatchMaxMessages);
+      const compactMessages = normalizeCaptureMessages(batch.messages);
+      const payload = trimToCaptureBudget(compactMessages);
       if (!payload.length) return;
+      if (!payload.some((m) => m.role === "user")) {
+        api.logger.debug?.("[mem0] 捕获批次缺少用户输入，跳过写入");
+        return;
+      }
+      if (isDuplicateCapturePayload(batch.sessionId, payload)) {
+        api.logger.debug?.("[mem0] 捕获批次与近期内容重复，跳过写入");
+        return;
+      }
 
       try {
         const res = await provider.add(payload as any, buildAddOptions(undefined, batch.sessionId));
         if (res.results.length > 0) {
           clearSearchCache();
           api.logger.info(`[mem0] ✨ 批量捕获 ${payload.length} 条消息，提取 ${res.results.length} 条新记忆`);
-          const mergedQuery = payload.map((m) => m.content).join(" ").slice(0, 2000);
+          const mergedQuery = payload
+            .filter((m) => m.role === "user")
+            .map((m) => m.content)
+            .join(" ")
+            .slice(0, 2000);
           if (mergedQuery.trim()) {
             const memories = await provider.search(mergedQuery, buildSearchOptions(undefined, cfg.topK));
             reflectionEngine.reflect(payload as any, memories);
@@ -826,21 +948,24 @@ const memoryPlugin = {
       }
     };
     const scheduleCaptureBatch = (sessionId: string | undefined, messages: Array<{ role: "user" | "assistant"; content: string }>) => {
+      const normalized = normalizeCaptureMessages(messages);
+      if (!normalized.length) return;
       const bufferKey = getCaptureBufferKey(sessionId);
       const current = captureBuffers.get(bufferKey) || { sessionId, messages: [] as Array<{ role: "user" | "assistant"; content: string }> };
       current.sessionId = sessionId || current.sessionId;
-      current.messages.push(...messages);
-      if (current.messages.length > captureBatchMaxMessages) {
-        current.messages = current.messages.slice(-captureBatchMaxMessages);
+      current.messages.push(...normalized);
+      if (current.messages.length > captureInputMaxMessages) {
+        current.messages = current.messages.slice(-captureInputMaxMessages);
       }
       captureBuffers.set(bufferKey, current);
 
       if (captureTimers.has(bufferKey)) {
         clearTimeout(captureTimers.get(bufferKey)!);
       }
+      const delayMs = current.messages.length >= captureInputMaxMessages ? 120 : captureBatchWindowMs;
       const timer = setTimeout(() => {
         void flushCaptureBuffer(bufferKey);
-      }, captureBatchWindowMs);
+      }, delayMs);
       captureTimers.set(bufferKey, timer);
     };
 
@@ -896,29 +1021,21 @@ const memoryPlugin = {
         const sessionId = (ctx as any)?.sessionKey;
         if (sessionId) currentSessionId = sessionId;
 
-        // Helper to extract text from message content (string or array)
-        const extractText = (content: any): string => {
-          if (typeof content === "string") return content;
-          if (Array.isArray(content)) {
-            return content
-              .filter((c: any) => c.type === "text")
-              .map((c: any) => c.text || "")
-              .join("\n");
-          }
-          return "";
-        };
-
         const validMsgs = event.messages.filter((m: any) => {
           if (m.role !== "user" && m.role !== "assistant") return false;
-          const text = extractText(m.content);
+          const text = extractCaptureText(m.content);
           return text.trim().length > 0;
         }).map((m: any) => ({
           role: m.role,
-          content: extractText(m.content)
-        })).slice(-10);
+          content: extractCaptureText(m.content)
+        })).slice(-captureInputMaxMessages);
 
         if (!validMsgs.length) {
           api.logger.debug?.(`[mem0] 没有有效的文本消息，跳过捕获`);
+          return;
+        }
+        if (!validMsgs.some((m: any) => m.role === "user")) {
+          api.logger.debug?.(`[mem0] 对话中无用户消息，跳过捕获`);
           return;
         }
         scheduleCaptureBatch(
